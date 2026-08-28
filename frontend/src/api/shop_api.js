@@ -52,9 +52,9 @@ export function importShopByCookie(payload) {
   return post('/shops/import-by-cookie', payload)
 }
 
-// 通过「账号密码登录」新增店铺（需求 4.1 / 4.2）
-// 后端经 websocket 服务的 Playwright 登录拼多多并自动获取真实店铺信息后落库，无需手填 shop_id。
-// payload: { username, password, remark? }
+// 通过「账号密码登录」新增店铺（需求 4.1 / 4.2，TIK-004 支持平台分派）
+// 后端经 websocket 服务的 Playwright 登录对应平台卖家后台并自动获取真实店铺信息后落库。
+// payload: { username, password, remark?, platform? }  platform: pdd=拼多多 / tiktok=TikTok Shop（缺省 pdd）
 export function loginShopByPassword(payload) {
   return post('/shops/login-by-password', payload)
 }

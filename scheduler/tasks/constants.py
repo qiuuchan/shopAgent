@@ -7,7 +7,7 @@ scheduler.tasks.constants —— 定时任务常量集中管理
 
 各常量取值与 common 数据字典 ``schedule_type`` / ``run_result`` 及业务模型
 ``ScheduledTask`` / ``TaskRunLog`` 的枚举约定保持一致（需求 21.2）：
-- 任务键 task_key：cookie_refresh / product_sync / log_file_cleanup；
+- 任务键 task_key：cookie_refresh / product_sync / log_file_cleanup / tiktok_window；
 - 调度方式 schedule_type：cron（Cron 表达式）/ interval（固定间隔秒数）；
 - 执行结果 run_result：success / failed。
 """
@@ -22,10 +22,13 @@ TASK_COOKIE_REFRESH: str = "cookie_refresh"
 TASK_PRODUCT_SYNC: str = "product_sync"
 # 文件日志清理：按保留天数仅清理磁盘日志文件（数据库业务日志表禁止物理删除）。
 TASK_LOG_FILE_CLEANUP: str = "log_file_cleanup"
+# TikTok 营业时间窗控制：周期比对 TikTok 店铺的营业时间期望态与连接实态，
+# 收敛 connect / disconnect（需求 24.x，TIK-015）。
+TASK_TIKTOK_WINDOW: str = "tiktok_window"
 
 # 全部受支持的任务键集合（用于校验配置中的 task_key 是否可调度）。
 SUPPORTED_TASK_KEYS: frozenset[str] = frozenset(
-    {TASK_COOKIE_REFRESH, TASK_PRODUCT_SYNC, TASK_LOG_FILE_CLEANUP}
+    {TASK_COOKIE_REFRESH, TASK_PRODUCT_SYNC, TASK_LOG_FILE_CLEANUP, TASK_TIKTOK_WINDOW}
 )
 
 # ----------------------------------------------------------------------
@@ -49,6 +52,7 @@ __all__ = [
     "TASK_COOKIE_REFRESH",
     "TASK_PRODUCT_SYNC",
     "TASK_LOG_FILE_CLEANUP",
+    "TASK_TIKTOK_WINDOW",
     "SUPPORTED_TASK_KEYS",
     "SCHEDULE_TYPE_CRON",
     "SCHEDULE_TYPE_INTERVAL",

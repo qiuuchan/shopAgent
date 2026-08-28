@@ -43,6 +43,11 @@ _RETRY_BACKOFF: float = 2.0
 _COOKIE_REFRESH_PATH: str = "/api/v1/cookies/refresh"
 # backend 服务「商品同步」接口相对路径（与 backend products 路由约定一致）。
 _PRODUCT_SYNC_PATH: str = "/api/v1/products/sync"
+# websocket 服务「连接管理」接口相对路径（与 websocket routes/connections 约定一致）：
+# connect（启动连接，带 platform）/ disconnect（断开连接）/ status-batch（批量查状态）。
+_CONNECT_PATH: str = "/api/v1/connections/connect"
+_DISCONNECT_PATH: str = "/api/v1/connections/disconnect"
+_STATUS_BATCH_PATH: str = "/api/v1/connections/status-batch"
 
 
 @dataclass
@@ -118,7 +123,12 @@ def _post_with_retry(
     return response
 
 
-def trigger_cookie_refresh(shop_pk: int, shop_id: str, owner_user_id: Optional[int]) -> CallResult:
+def trigger_cookie_refresh(
+    shop_pk: int,
+    shop_id: str,
+    owner_user_id: Optional[int],
+    platform: str = "pdd",
+) -> CallResult:
     """经 HTTP 调用 websocket 服务刷新指定店铺的 Cookie（需求 4.6 / 21.2）。
 
     地址经环境变量 ``WEBSOCKET_SERVICE_URL`` 配置（禁止写死 localhost，规范 21）。
@@ -128,6 +138,8 @@ def trigger_cookie_refresh(shop_pk: int, shop_id: str, owner_user_id: Optional[i
         shop_pk: 店铺主键（shop.id）。
         shop_id: 拼多多店铺业务标识。
         owner_user_id: 店铺归属用户 ID（用于 websocket 侧定位凭据）。
+        platform: 平台标识（pdd / tiktok，透传给 websocket 侧；TikTok 登录态常驻
+            浏览器目录，websocket 侧跳过刷新返回 success，防止误走 PDD 刷新路径）。
 
     Returns:
         规整后的 ``CallResult``。
@@ -135,7 +147,12 @@ def trigger_cookie_refresh(shop_pk: int, shop_id: str, owner_user_id: Optional[i
     response = _post_with_retry(
         service_client.websocket_base_url(),
         _COOKIE_REFRESH_PATH,
-        {"shop_pk": shop_pk, "shop_id": shop_id, "owner_user_id": owner_user_id},
+        {
+            "shop_pk": shop_pk,
+            "shop_id": shop_id,
+            "owner_user_id": owner_user_id,
+            "platform": platform,
+        },
     )
     return _to_call_result(response)
 
@@ -160,8 +177,100 @@ def trigger_product_sync(shop_pk: int) -> CallResult:
     return _to_call_result(response)
 
 
+def trigger_connect(
+    shop_pk: int,
+    shop_id: str,
+    owner_user_id: Optional[int],
+    *,
+    platform: str = "pdd",
+    proxy_server: Optional[str] = None,
+) -> CallResult:
+    """经 HTTP 调用 websocket 服务启动指定店铺的连接（需求 24.x，TIK-015）。
+
+    地址经环境变量 ``WEBSOCKET_SERVICE_URL`` 配置（禁止写死 localhost，规范 21）。
+    传输层失败时按指数退避重试，避免对端短暂抖动导致本次任务失败。
+
+    Args:
+        shop_pk: 店铺主键（shop.id）。
+        shop_id: 店铺业务标识。
+        owner_user_id: 店铺归属用户 ID。
+        platform: 平台标识（pdd/tiktok，透传给 websocket 侧工厂分派）。
+        proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 tiktok 店铺消费，
+            空 / None 表示不走代理），透传给 websocket 侧建浏览器会话。
+
+    Returns:
+        规整后的 ``CallResult``。
+    """
+    response = _post_with_retry(
+        service_client.websocket_base_url(),
+        _CONNECT_PATH,
+        {
+            "shop_pk": shop_pk,
+            "shop_id": shop_id,
+            "owner_user_id": owner_user_id,
+            "platform": platform,
+            "proxy_server": proxy_server,
+        },
+    )
+    return _to_call_result(response)
+
+
+def trigger_disconnect(
+    shop_pk: int, shop_id: str, owner_user_id: Optional[int]
+) -> CallResult:
+    """经 HTTP 调用 websocket 服务断开指定店铺的连接（需求 24.x，TIK-015，幂等）。
+
+    地址经环境变量 ``WEBSOCKET_SERVICE_URL`` 配置（禁止写死 localhost，规范 21）。
+    传输层失败时按指数退避重试，避免对端短暂抖动导致本次任务失败。
+
+    Args:
+        shop_pk: 店铺主键（shop.id）。
+        shop_id: 店铺业务标识。
+        owner_user_id: 店铺归属用户 ID。
+
+    Returns:
+        规整后的 ``CallResult``。
+    """
+    response = _post_with_retry(
+        service_client.websocket_base_url(),
+        _DISCONNECT_PATH,
+        {
+            "shop_pk": shop_pk,
+            "shop_id": shop_id,
+            "owner_user_id": owner_user_id,
+        },
+    )
+    return _to_call_result(response)
+
+
+def query_status_batch(
+    shops: list[dict[str, Any]],
+) -> CallResult:
+    """经 HTTP 调用 websocket 服务批量查询多个店铺的连接状态（需求 24.x，TIK-015）。
+
+    一次请求查询全部店铺，避免逐个 HTTP 调用；地址经环境变量
+    ``WEBSOCKET_SERVICE_URL`` 配置（禁止写死 localhost，规范 21）。传输层失败时
+    按指数退避重试，避免对端短暂抖动导致本次任务失败。
+
+    Args:
+        shops: 待查询店铺列表，每项 ``{"shop_id": ..., "owner_user_id": ...}``。
+
+    Returns:
+        规整后的 ``CallResult``；成功时 ``data`` 含 ``{"statuses": [...]}``。
+    """
+    response = _post_with_retry(
+        service_client.websocket_base_url(),
+        _STATUS_BATCH_PATH,
+        {"shops": shops},
+    )
+    return _to_call_result(response)
+
+
 __all__ = [
     "CallResult",
     "trigger_cookie_refresh",
     "trigger_product_sync",
+    "trigger_connect",
+    "trigger_disconnect",
+    "query_status_batch",
 ]

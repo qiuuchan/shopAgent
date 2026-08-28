@@ -82,12 +82,27 @@ const form = reactive({
   username: '',
   password: '',
   cookies: '',
+  platform: 'pdd', // 店铺平台：pdd=拼多多 / tiktok=TikTok Shop（TIK-004）
+  proxy_server: '', // 店铺出口代理服务器地址（Phase 2 前置，仅 TikTok 通道消费）
 })
+
+// 平台选项（新增店铺时选择；TikTok 仅支持账号密码登录）
+const PLATFORM_OPTIONS = [
+  { value: 'pdd', label: '拼多多' },
+  { value: 'tiktok', label: 'TikTok Shop' },
+]
+
+// 切换平台：TikTok 仅支持账号密码登录，Cookie 导入态强制回到密码登录
+function onPlatformChange() {
+  if (form.platform === 'tiktok' && formMode.value === 'cookie') {
+    formMode.value = 'password'
+  }
+}
 
 // 弹窗标题（按模式区分）
 const formTitle = ref('')
 
-// 重置表单
+// 重置表单（platform 保留上次选择，便于连续新增同平台店铺）
 function resetForm() {
   form.shop_id = ''
   form.shop_name = ''
@@ -95,6 +110,7 @@ function resetForm() {
   form.username = ''
   form.password = ''
   form.cookies = ''
+  form.proxy_server = ''
   editingShopPk.value = null
 }
 
@@ -106,10 +122,11 @@ function openPasswordLogin() {
   formVisible.value = true
 }
 
-// 打开「Cookie 导入」新增（需求 4.3）
+// 打开「Cookie 导入」新增（需求 4.3；Cookie 导入仅拼多多支持）
 function openCookieImport() {
   resetForm()
   formMode.value = 'cookie'
+  form.platform = 'pdd'
   formTitle.value = 'Cookie 导入新增店铺'
   formVisible.value = true
 }
@@ -123,6 +140,7 @@ async function openEdit(shop) {
   form.shop_id = shop.shop_id
   form.shop_name = shop.shop_name || ''
   form.remark = shop.remark || ''
+  form.platform = shop.platform || 'pdd'
   showPassword.value = false
   editDetailLoaded.value = false
   formVisible.value = true
@@ -132,6 +150,7 @@ async function openEdit(shop) {
     form.username = detail.username || ''
     form.password = detail.password || ''
     form.cookies = detail.cookies || ''
+    form.proxy_server = detail.proxy_server || ''
     editDetailLoaded.value = true
   }
 }
@@ -143,7 +162,10 @@ function validateForm() {
   }
   if (formMode.value === 'password') {
     if (!form.username.trim() || !form.password.trim()) {
-      showToast('请填写拼多多登录账号与密码', TOAST_TYPE.WARNING)
+      showToast(
+        form.platform === 'tiktok' ? '请填写 TikTok 登录账号与密码' : '请填写拼多多登录账号与密码',
+        TOAST_TYPE.WARNING,
+      )
       return false
     }
   }
@@ -174,6 +196,8 @@ async function submitForm() {
         payload.username = form.username.trim()
         payload.password = form.password
         payload.cookies = form.cookies.trim()
+        // 出口代理：提交当前展示值（留空即清空不走代理；仅 TikTok 店铺有意义）。
+        payload.proxy_server = form.proxy_server.trim()
       }
       await shopApi.updateShop(editingShopPk.value, payload)
       showToast('店铺已更新', TOAST_TYPE.SUCCESS)
@@ -182,6 +206,7 @@ async function submitForm() {
         username: form.username.trim(),
         password: form.password,
         remark: form.remark.trim() || undefined,
+        platform: form.platform,
       })
       showToast('账号密码登录成功，已自动获取店铺信息', TOAST_TYPE.SUCCESS)
     } else {
@@ -291,6 +316,7 @@ onMounted(loadShops)
         <table class="data-table">
           <thead>
             <tr>
+              <th>平台</th>
               <th>店铺标识</th>
               <th>店铺名称</th>
               <th>备注</th>
@@ -302,6 +328,14 @@ onMounted(loadShops)
           </thead>
           <tbody>
             <tr v-for="shop in shops" :key="shop.id">
+              <td>
+                <span
+                  class="tag"
+                  :class="shop.platform === 'tiktok' ? 'tag--tiktok' : 'tag--pdd'"
+                >
+                  {{ shop.platform === 'tiktok' ? 'TikTok' : '拼多多' }}
+                </span>
+              </td>
               <td><SafeHtml :content="shop.shop_id" /></td>
               <td><SafeHtml :content="shop.shop_name || '-'" /></td>
               <td><SafeHtml :content="shop.remark || '-'" /></td>
@@ -327,7 +361,7 @@ onMounted(loadShops)
               </td>
             </tr>
             <tr v-if="!loading && shops.length === 0">
-              <td class="data-table__empty" colspan="7">暂无店铺数据</td>
+              <td class="data-table__empty" colspan="8">暂无店铺数据</td>
             </tr>
           </tbody>
         </table>
@@ -351,9 +385,36 @@ onMounted(loadShops)
       @confirm="submitForm"
     >
       <div class="form">
+        <!-- 平台选择（新增时选定后不可改；TikTok 仅支持账号密码登录，TIK-004） -->
+        <div v-if="formMode !== 'edit'" class="form__item">
+          <label class="form__label">平台</label>
+          <div class="form__radio-group">
+            <label
+              v-for="opt in PLATFORM_OPTIONS"
+              :key="opt.value"
+              class="form__radio"
+            >
+              <input
+                type="radio"
+                :value="opt.value"
+                v-model="form.platform"
+                :disabled="formMode === 'cookie' && opt.value !== 'pdd'"
+                @change="onPlatformChange"
+              />
+              {{ opt.label }}
+            </label>
+          </div>
+        </div>
+
         <!-- 账号密码登录 / Cookie 导入：店铺标识与名称由登录后自动获取，无需手填 -->
         <p v-if="formMode !== 'edit'" class="form__hint">
-          登录成功后将自动获取店铺标识、名称与 Logo，无需手动填写。
+          {{
+            formMode === 'cookie'
+              ? 'Cookie 导入仅支持拼多多，登录成功后将自动获取店铺信息。'
+              : form.platform === 'tiktok'
+                ? '登录成功后将自动获取 TikTok 店铺信息（泰国站卖家后台）。'
+                : '登录成功后将自动获取店铺标识、名称与 Logo，无需手动填写。'
+          }}
         </p>
 
         <div v-if="formMode === 'edit'" class="form__item">
@@ -395,23 +456,51 @@ onMounted(loadShops)
               placeholder="登录 Cookie 文本（可查看 / 修改）"
             ></textarea>
           </div>
+          <div v-if="form.platform === 'tiktok'" class="form__item">
+            <label class="form__label">出口代理</label>
+            <input
+              v-model="form.proxy_server"
+              class="form__input"
+              type="text"
+              placeholder="选填，如 http://127.0.0.1:7890 或 socks5://host:port"
+            />
+            <p class="form__hint">
+              仅 TikTok 店铺生效：连接时浏览器会话经该代理出口（Phase 2 前置）；留空表示不走代理。
+            </p>
+          </div>
           <p class="form__hint">修改账号 / 密码 / Cookie 后保存即生效；店铺在线时将以新 Cookie 自动重连。</p>
         </template>
 
-        <!-- 账号密码登录字段 -->
+        <!-- 账号密码登录字段（TikTok 仅支持此方式） -->
         <template v-if="formMode === 'password'">
           <div class="form__item">
             <label class="form__label">登录账号<span class="form__required">*</span></label>
-            <input v-model="form.username" class="form__input" type="text" placeholder="拼多多商家后台账号" />
+            <input
+              v-model="form.username"
+              class="form__input"
+              type="text"
+              :placeholder="form.platform === 'tiktok' ? 'TikTok 卖家后台账号' : '拼多多商家后台账号'"
+            />
           </div>
           <div class="form__item">
             <label class="form__label">登录密码<span class="form__required">*</span></label>
-            <input v-model="form.password" class="form__input" type="password" placeholder="拼多多商家后台密码" />
+            <input
+              v-model="form.password"
+              class="form__input"
+              type="password"
+              :placeholder="form.platform === 'tiktok' ? 'TikTok 卖家后台密码' : '拼多多商家后台密码'"
+            />
           </div>
-          <p class="form__hint">提交后将通过浏览器自动登录获取凭据，若出现验证码 / 滑块请按提示完成验证。</p>
+          <p class="form__hint">
+            {{
+              form.platform === 'tiktok'
+                ? '提交后将通过浏览器自动登录 TikTok 泰国站卖家后台获取凭据，若出现验证码 / 滑块请按提示完成验证。'
+                : '提交后将通过浏览器自动登录获取凭据，若出现验证码 / 滑块请按提示完成验证。'
+            }}
+          </p>
         </template>
 
-        <!-- Cookie 导入字段 -->
+        <!-- Cookie 导入字段（仅拼多多支持） -->
         <template v-if="formMode === 'cookie'">
           <div class="form__item">
             <label class="form__label">Cookie 文本<span class="form__required">*</span></label>
@@ -553,6 +642,37 @@ onMounted(loadShops)
 .tag--off {
   background: #f2f3f5;
   color: #8c8c8c;
+}
+/* 平台徽标（TIK-004）：拼多多蓝 / TikTok 黑 */
+.tag--pdd {
+  background: #e8f1ff;
+  color: #1677ff;
+}
+.tag--tiktok {
+  background: #f2f3f5;
+  color: #111111;
+}
+
+/* 平台单选（TIK-004） */
+.form__radio-group {
+  display: flex;
+  gap: 16px;
+}
+.form__radio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--color-text, #1f2329);
+  cursor: pointer;
+}
+.form__radio input {
+  accent-color: var(--color-primary, #1677ff);
+  cursor: pointer;
+}
+.form__radio input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 /* 行内操作按钮 */

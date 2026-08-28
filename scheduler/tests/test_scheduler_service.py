@@ -252,18 +252,46 @@ def test_run_cookie_refresh_no_shops(db_session: Session):
 
 
 def test_run_cookie_refresh_all_success(db_session: Session, monkeypatch):
-    """全部店铺刷新成功：记成功执行日志。"""
+    """全部店铺刷新成功：记成功执行日志（含 platform 透传）。"""
     Repository(Shop, db_session).create(
         shop_id="S1", shop_name="店1", owner_user_id=1, status=1
     )
     db_session.commit()
 
+    captured = {}
     monkeypatch.setattr(
         service_client, "trigger_cookie_refresh",
-        lambda shop_pk, shop_id, owner_user_id: service_client.CallResult(ok=True, message="ok"),
+        lambda shop_pk, shop_id, owner_user_id, platform="pdd": captured.update(
+            platform=platform
+        ) or service_client.CallResult(ok=True, message="ok"),
     )
     task_runners.run_cookie_refresh()
 
+    logs = Repository(TaskRunLog, db_session).list(filters={"task_key": TASK_COOKIE_REFRESH})
+    assert len(logs) == 1
+    assert logs[0].run_result == RESULT_SUCCESS
+    # 无平台字段店铺回退默认 'pdd'。
+    assert captured.get("platform") == "pdd"
+
+
+def test_run_cookie_refresh_tiktok_platform_passed(db_session: Session, monkeypatch):
+    """TikTok 店铺 cookie 刷新透传 platform='tiktok'（websocket 侧跳过刷新，防误刷）。"""
+    Repository(Shop, db_session).create(
+        shop_id="S_TK", shop_name="TikTok店", owner_user_id=1, status=1, platform="tiktok"
+    )
+    db_session.commit()
+
+    captured = {}
+    monkeypatch.setattr(
+        service_client, "trigger_cookie_refresh",
+        lambda shop_pk, shop_id, owner_user_id, platform="pdd": captured.update(
+            platform=platform
+        ) or service_client.CallResult(ok=True, message="ok"),
+    )
+    task_runners.run_cookie_refresh()
+
+    # TikTok 店铺透传 platform='tiktok'（websocket 侧据此跳过 PDD 刷新路径）。
+    assert captured.get("platform") == "tiktok"
     logs = Repository(TaskRunLog, db_session).list(filters={"task_key": TASK_COOKIE_REFRESH})
     assert len(logs) == 1
     assert logs[0].run_result == RESULT_SUCCESS
