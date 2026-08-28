@@ -7,7 +7,8 @@ websocket.routes.messages —— 手动发送消息接口（供 backend 调用�
 （需求 14.3）。
 
 - ``POST /messages/send``：按 (shop_id, owner_user_id) 复用拼多多消息发送接口
-  （``channel_pdd.api.send_message.SendMessage.send_text``）下发一条文本消息。
+  （``channel_pdd.api.send_message.SendMessage.send_text``）下发一条文本消息；
+  TikTok 店铺复用活跃通道的 ``TikTokSender``（DOM 发送，TIK-016 Phase 2）。
 
 接口约定（开发规范 1-3）：HTTP 恒返回 200，业务成败由统一响应体
 ``{code, success, message, data}`` 表达；发送成功 / 失败均由 backend 据响应记录
@@ -19,6 +20,7 @@ websocket.routes.messages —— 手动发送消息接口（供 backend 调用�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -28,6 +30,10 @@ from pydantic import BaseModel, Field
 from channel_pdd.api.get_chat_history import GetChatHistory
 from channel_pdd.api.get_conversations import GetConversations
 from channel_pdd.api.send_message import SendMessage
+from channel_pdd.connection_registry import get as get_connection
+from common.db.repository import Repository
+from common.db.session import session_scope
+from common.models.shop_models import Shop
 from common.schemas.common import ApiResponse, error_response, success_response
 
 logger = logging.getLogger("websocket.routes.messages")
@@ -65,6 +71,22 @@ async def send_message(payload: SendMessageRequest) -> ApiResponse:
         统一响应体：下发成功返回 success；失败返回 error_response。
     """
     try:
+        # 多平台分派（TIK-016）：TikTok 店铺复用活跃通道的 TikTokSender 发送（DOM）；
+        # 查库 / 缺记录统一记 warning 并回退原 PDD 路径，保证 PDD 行为零变更。
+        platform = None
+        try:
+            with session_scope() as session:
+                shop = Repository(Shop, session).get_by(id=payload.shop_pk)
+            if shop is not None:
+                platform = getattr(shop, "platform", None)
+        except Exception as db_exc:  # noqa: BLE001 - 查库异常不影响 PDD 主路径
+            logger.warning(
+                "查询店铺平台失败，回退 PDD 发送路径: shop_pk=%s, %s", payload.shop_pk, db_exc
+            )
+
+        if platform == "tiktok":
+            return await _send_tiktok_message(payload)
+
         sender = SendMessage(shop_id=payload.shop_id, user_id=payload.owner_user_id)
         result = sender.send_text(payload.recipient_uid, payload.content)
     except Exception as exc:  # noqa: BLE001 - 发送异常不抛出，规整为失败响应
@@ -80,6 +102,53 @@ async def send_message(payload: SendMessageRequest) -> ApiResponse:
         return success_response(message="消息已发送")
 
     logger.warning("手动发送消息失败: shop_id=%s", payload.shop_id)
+    return error_response(-1, "消息发送失败")
+
+
+async def _send_tiktok_message(payload: SendMessageRequest) -> ApiResponse:
+    """TikTok 店铺手动发送：复用活跃通道的 TikTokSender 下发（DOM，TIK-016 Phase 2）。
+
+    从连接注册表按 (shop_id, owner_user_id) 取本店铺活跃通道（TikTokChannel），取其
+    注入的 ``sender``（与自动回复消费器同一实例，共享主循环侧串行锁，手动 / 自动发送
+    互斥）下发文本消息；手动发送跳过发送最小随机间隔（人工操作自有节奏，且 15s 发送
+    超时不应被 45-120s 间隔拖垮）。
+
+    Args:
+        payload: 手动发送请求体（TikTok 店铺）。
+
+    Returns:
+        统一响应体：下发成功返回 success；失败返回 error_response。
+    """
+    try:
+        channel = get_connection(payload.shop_id, payload.owner_user_id)
+        sender = getattr(channel, "sender", None) if channel is not None else None
+        if sender is None:
+            logger.warning(
+                "TikTok 店铺无活跃连接/发送器，无法手动发送: shop_id=%s", payload.shop_id
+            )
+            return error_response(-1, "TikTok 店铺未连接，请先建立连接")
+
+        # TikTokSender.send_text 为同步签名（内部桥接主循环 + 发送超时），丢线程池执行
+        # 避免阻塞事件循环；手动发送跳过最小随机间隔（enforce_interval=False）。
+        result = await asyncio.to_thread(
+            sender.send_text,
+            payload.recipient_uid,
+            payload.content,
+            enforce_interval=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - 发送异常不抛出，规整为失败响应
+        logger.error("TikTok 手动发送消息异常: shop_id=%s, %s", payload.shop_id, exc)
+        return error_response(-1, "消息发送失败，请稍后重试")
+
+    if result is not None:
+        logger.info(
+            "TikTok 手动消息已下发: shop_id=%s, customer=%s",
+            payload.shop_id,
+            payload.recipient_uid,
+        )
+        return success_response(message="消息已发送")
+
+    logger.warning("TikTok 手动发送消息失败: shop_id=%s", payload.shop_id)
     return error_response(-1, "消息发送失败")
 
 

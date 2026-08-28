@@ -31,11 +31,38 @@ from channel_pdd.core.credential_store import (
     update_account_cookies,
 )
 from common.schemas.common import ApiResponse, error_response, success_response
+from engine.alert_dedup import build_alert_notifier, get_alert_dedup
 
 logger = logging.getLogger("websocket.routes.cookies")
 
+# Cookie 刷新失败告警事件类型（与连接断开链路共用 alert_dedup 去重维度）。
+_EVENT_COOKIE_REFRESH_FAILED: str = "cookie_refresh_failed"
+
 # Cookie 刷新路由：标签便于 OpenAPI 分组；前缀由聚合层添加。
 router = APIRouter(tags=["Cookie 刷新"])
+
+
+def _alert_cookie_refresh_failed(shop_pk: int, shop_id: str, reason: str) -> None:
+    """触发 Cookie 刷新失败告警（TIK-005：与连接断开共用去重链路）。
+
+    复用全局去重单例按 (shop_pk, cookie_refresh_failed) 维度防抖；Webhook 地址暂未
+    提供，send_cb 缺省为 None，仅日志占位。失败不应影响本路由的响应体返回。
+
+    Args:
+        shop_pk: 店铺主键 shop.id。
+        shop_id: 拼多多店铺业务标识。
+        reason: 失败原因（仅用于日志 / 占位内容）。
+    """
+    try:
+        notifier = build_alert_notifier(get_alert_dedup(), shop_pk, send_cb=None)
+        notifier(
+            _EVENT_COOKIE_REFRESH_FAILED,
+            f"店铺 shop_id={shop_id} Cookie 刷新失败：{reason}",
+        )
+    except Exception as exc:  # noqa: BLE001 - 告警失败不得影响主流程
+        logger.warning(
+            "Cookie 刷新失败告警触发异常（已忽略）: shop_id=%s, %s", shop_id, exc
+        )
 
 
 class RefreshCookieRequest(BaseModel):
@@ -44,6 +71,7 @@ class RefreshCookieRequest(BaseModel):
     shop_pk: int = Field(..., description="店铺主键 shop.id")
     shop_id: str = Field(..., description="拼多多店铺业务标识")
     owner_user_id: Optional[int] = Field(None, description="店铺归属用户 ID")
+    platform: str = Field("pdd", description="平台标识（pdd/tiktok，缺省 pdd）")
 
 
 @router.post(
@@ -65,6 +93,14 @@ async def refresh_cookie(payload: RefreshCookieRequest) -> ApiResponse:
     Returns:
         统一响应体：刷新成功返回 success；失败返回 error_response。
     """
+    # TikTok 店铺登录态常驻浏览器用户数据目录，无需刷新 Cookie（TIK-016）。
+    # 该短路置于 owner_user_id 校验之前；告警链路（TIK-005）与两处触发调用一律不动。
+    if payload.platform == "tiktok":
+        return success_response(
+            data={"shop_id": payload.shop_id, "shop_pk": payload.shop_pk, "skipped": True},
+            message="TikTok 店铺登录态常驻浏览器目录，跳过 Cookie 刷新",
+        )
+
     # owner_user_id 缺失无法定位账号凭据，直接返回失败（不抛异常）。
     if payload.owner_user_id is None:
         logger.warning("Cookie 刷新缺少归属用户 ID：shop_id=%s", payload.shop_id)
@@ -85,10 +121,18 @@ async def refresh_cookie(payload: RefreshCookieRequest) -> ApiResponse:
         info = await pdd_login.refresh_pdd_cookies(username, payload.owner_user_id)
     except Exception as exc:  # noqa: BLE001 - 刷新异常不抛出，规整为失败响应
         logger.error("Cookie 刷新异常：shop_id=%s, %s", payload.shop_id, exc)
+        # TIK-005：刷新异常触发告警链路（去重防抖，Webhook 暂未配置）。
+        _alert_cookie_refresh_failed(
+            payload.shop_pk, payload.shop_id, f"刷新异常：{exc}"
+        )
         return error_response(-1, "Cookie 刷新失败，请稍后重试")
 
     if info is None:
         logger.warning("店铺 shop_id=%s 登录态已失效，Cookie 刷新失败", payload.shop_id)
+        # TIK-005：登录态失效触发告警链路（去重防抖，Webhook 暂未配置）。
+        _alert_cookie_refresh_failed(
+            payload.shop_pk, payload.shop_id, "登录态已失效"
+        )
         return error_response(-1, "登录态已失效，需重新登录")
 
     # 刷新成功：将新 Cookie 加密回写 account 表（不返回明文，需求 3.6）。

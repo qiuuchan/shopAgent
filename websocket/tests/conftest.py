@@ -17,3 +17,29 @@ _REPO_ROOT = os.path.dirname(_WS_DIR)
 for _path in (_WS_DIR, _REPO_ROOT):
     if _path not in sys.path:
         sys.path.insert(0, _path)
+
+# 以下导入依赖上方 sys.path 配置，故置于其后（pytest conftest 惯例例外）。
+import types  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture()
+def tiktok_enabled(monkeypatch: pytest.MonkeyPatch):
+    """开启 TikTok 灰度开关并注入最小配置（TIK-017）。
+
+    connection_manager 经 ``get_settings()`` 读取 ``tiktok_shop_enabled`` 等配置；
+    默认配置下灰度开关为 false（TikTok 连接被拒），TikTok 装配类测试需本 fixture
+    注入开启态的最小配置对象（monkeypatch 模块级引用，仅本测试生效）。
+    """
+    settings = types.SimpleNamespace(
+        tiktok_shop_enabled=True,
+        tiktok_max_browser_instances=4,
+        tiktok_send_timeout_seconds=15.0,
+        tiktok_poll_interval_seconds=5.0,
+        tiktok_debounce_seconds=45.0,
+    )
+    monkeypatch.setattr(
+        "channel_pdd.connection_manager.get_settings", lambda: settings
+    )
+    return settings

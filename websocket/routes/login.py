@@ -30,6 +30,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from channel_pdd import pdd_login
+from channel_tiktok.tiktok_login import login_tiktok
 from common.schemas.common import ApiResponse, error_response, success_response
 
 logger = logging.getLogger("websocket.routes.login")
@@ -43,6 +44,7 @@ class PasswordLoginRequest(BaseModel):
 
     username: str = Field(..., description="拼多多商家后台登录账号")
     password: str = Field(..., description="拼多多商家后台登录密码（明文，仅内网传输）")
+    platform: str = Field("pdd", description="平台标识（pdd/tiktok，缺省 pdd）")
 
 
 class CookieImportRequest(BaseModel):
@@ -71,7 +73,11 @@ async def login_by_password(payload: PasswordLoginRequest) -> ApiResponse:
         统一响应体：成功返回店铺与账号信息；失败返回中文原因。
     """
     try:
-        info = await pdd_login.login_pdd(payload.username, payload.password)
+        # 多平台分派（TIK-016）：tiktok 走占位登录函数，其余平台（含缺省 pdd）走原 PDD 登录。
+        if payload.platform == "tiktok":
+            info = await login_tiktok(payload.username, payload.password)
+        else:
+            info = await pdd_login.login_pdd(payload.username, payload.password)
     except Exception as exc:  # noqa: BLE001 - 登录异常不抛出，规整为失败响应
         logger.error("账号 '%s' 登录异常：%s", payload.username, exc)
         return error_response(-1, "账号密码登录失败，请稍后重试")

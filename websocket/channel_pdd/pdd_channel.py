@@ -129,6 +129,7 @@ class PDDChannel:
         token_provider: Optional[TokenProvider] = None,
         message_queue: Optional[MessageQueueProtocol] = None,
         message_handler: Optional[MessageHandler] = None,
+        event_notifier: Optional[Callable[..., Any]] = None,
     ) -> None:
         """初始化店铺连接服务。
 
@@ -143,6 +144,10 @@ class PDDChannel:
             token_provider: Token 获取回调（缺省采用 default_token_provider）。
             message_queue: 消息入队队列（缺省使用内置 asyncio.Queue，FIFO）。
             message_handler: 消息消费回调（缺省仅入队，由 task 10.6 / 上层消费）。
+            event_notifier: 可选系统事件通知器（TIK-005 告警链路，默认 None）。
+                签名为 ``event_notifier(event_type: str, content: str)``；当重连达上限
+                置「错误」时触发 ``connection_disconnected`` 事件。**为 None 时行为与
+                现状逐字节一致（硬约束），不引入任何额外调用。**
         """
         self.shop_id = shop_id
         self.user_id = user_id
@@ -161,6 +166,10 @@ class PDDChannel:
             name=f"{user_id}:{shop_id}"
         )
         self._message_handler = message_handler
+
+        # 系统事件通知器（TIK-005 告警链路）：默认 None，保持既有行为零变更。
+        # 由 connection_manager 注入（闭包已绑定 shop_pk 的 alert notifier）。
+        self._event_notifier: Optional[Callable[..., Any]] = event_notifier
 
         # 运行时状态。
         self.ws: Optional[Any] = None
@@ -302,6 +311,25 @@ class PDDChannel:
                 logger.error(
                     "连接失败，已达最大重试次数: shop_id=%s", self.shop_id
                 )
+                # TIK-005：达到重连上限（连接断开告警链路）触发事件通知。
+                # 仅当注入了 event_notifier 才触发；为 None 时本分支与现状一致。
+                if self._event_notifier is not None:
+                    content = (
+                        f"店铺 shop_id={self.shop_id} 长连接断开，"
+                        f"重连已达上限（user_id={self.user_id}）"
+                    )
+                    try:
+                        result = self._event_notifier(
+                            "connection_disconnected", content
+                        )
+                        # 通知器可能为协程（异步发送），兼容 awaited 触发。
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception as exc:  # noqa: BLE001 - 告警不应影响主链路
+                        logger.warning(
+                            "连接断开事件通知失败（已忽略）: shop_id=%s, %s",
+                            self.shop_id, exc,
+                        )
                 return
 
             # 指数退避等待（封顶 max_delay），等待期间响应停止信号。

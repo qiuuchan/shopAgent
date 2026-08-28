@@ -21,6 +21,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from channel_base import PLATFORM_PDD
 from channel_pdd import connection_manager, connection_registry
 from channel_pdd.transfer_service import TransferService
 from common.schemas.common import ApiResponse, error_response, success_response
@@ -35,8 +36,14 @@ class ConnectRequest(BaseModel):
     """启动连接请求体（与 backend 店铺启用 / 连接约定一致）。"""
 
     shop_pk: int = Field(..., description="店铺主键 shop.id")
-    shop_id: str = Field(..., description="拼多多店铺业务标识")
+    shop_id: str = Field(..., description="店铺业务标识")
     owner_user_id: int = Field(..., description="店铺归属用户 ID")
+    platform: str = Field(PLATFORM_PDD, description="平台标识（pdd/tiktok，缺省 pdd）")
+    proxy_server: Optional[str] = Field(
+        None,
+        description="店铺出口代理服务器地址（Phase 2 前置；仅 tiktok 通道建浏览器"
+        "会话时消费，空 / None 表示不走代理）",
+    )
 
 
 class DisconnectRequest(BaseModel):
@@ -96,7 +103,11 @@ async def connect_connection(payload: ConnectRequest) -> ApiResponse:
     """
     try:
         await connection_manager.start_channel(
-            payload.shop_id, payload.shop_pk, payload.owner_user_id
+            payload.shop_id,
+            payload.shop_pk,
+            payload.owner_user_id,
+            platform=payload.platform,
+            proxy_server=payload.proxy_server,
         )
     except Exception as exc:  # noqa: BLE001 - 启动异常不抛出，规整为失败响应
         logger.error("启动店铺连接异常: shop_id=%s, %s", payload.shop_id, exc)

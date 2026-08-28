@@ -89,6 +89,8 @@ class ShopConfig:
         business_enabled: 营业时间控制是否启用；False 视为全天营业（需求 11.4）。
         business_start: 营业开始时刻（time / "HH:MM" / "HH:MM:SS" / None）。
         business_end: 营业结束时刻（同上，可早于开始时刻表示跨午夜）。
+        business_weekdays: 营业星期维度表达式（"1,2,3,4,5" 表示周一至周五）；
+            None / 空串表示每天（兼容旧数据，行为不变）。
         risk_enabled: 风控是否启用；False 时不做频率限制（需求 13.2）。
         session_reply_limit: 单会话回复频率上限（None 表示不限制）。
         shop_reply_limit: 单店铺回复频率上限（None 表示不限制）。
@@ -107,6 +109,7 @@ class ShopConfig:
     business_enabled: bool = True
     business_start: TimeLike = None
     business_end: TimeLike = None
+    business_weekdays: Optional[str] = None
     risk_enabled: bool = True
     session_reply_limit: Optional[int] = None
     shop_reply_limit: Optional[int] = None
@@ -352,6 +355,7 @@ def decide_reply(
         shop_config.business_start,
         shop_config.business_end,
         enabled=shop_config.business_enabled,
+        weekdays=shop_config.business_weekdays,
         now=now,
     ):
         return ReplyDecision(

@@ -18,21 +18,40 @@ channel_pdd.connection_manager —— 连接 + 消费器装配（端到端串联
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Set, Tuple
 
+from channel_base import ALLOWED_PLATFORMS, PLATFORM_PDD, PLATFORM_TIKTOK
+from channel_base import ChannelAdapter, is_allowed_platform
 from channel_pdd import connection_registry
 from channel_pdd.message_queue import message_queue_manager
 from channel_pdd.pdd_channel import PDDChannel
+from channel_tiktok.browser_session import BrowserSession
+from channel_tiktok.tiktok_channel import TikTokChannel
+from channel_tiktok.tiktok_message import parse_tiktok_raw
+from channel_tiktok.tiktok_sender import TikTokSender
+from common.core.config import get_settings
 from common.db.repository import Repository
 from common.db.session import session_scope
 from common.models.shop_models import Shop
+from engine.alert_dedup import build_alert_notifier, get_alert_dedup
 from engine.message_consumer import MessageConsumer, build_notifier
 
 logger = logging.getLogger("channel_pdd.connection_manager")
 
 # 店铺启用状态值（与 common.models.shop_models.Shop.status 约定一致：1=启用）。
 _SHOP_STATUS_ENABLED: int = 1
+
+# 连接断开告警事件类型（与 alert_dedup 去重维度一致，规范 52 复用常量语义）。
+_EVENT_CONNECTION_DISCONNECTED: str = "connection_disconnected"
+
+# TikTok 活跃通道登记键集合（(shop_id, user_id)），用于限制并发浏览器实例数
+# （TIKTOK_MAX_BROWSER_INSTANCES，TIK-017）。停止路径不感知平台（registry.disconnect
+# 由 routes 直接调用），故采用「检查时惰性清理」：登记键对应注册表已无活跃连接即视为
+# 已释放，保证计数最终一致、不因停止路径不可达而只增不减。
+_TIKTOK_ACTIVE_KEYS: Set[Tuple[str, Optional[int]]] = set()
 
 
 def build_message_handler(consumer: MessageConsumer):
@@ -56,28 +75,150 @@ def build_message_handler(consumer: MessageConsumer):
     return _handler
 
 
+def _enforce_tiktok_limit(shop_id: str, user_id: Optional[int]) -> None:
+    """检查 TikTok 并发浏览器实例上限（TIKTOK_MAX_BROWSER_INSTANCES，TIK-017）。
+
+    超限时抛 ``RuntimeError``（由调用方路由规整为失败响应），并以 error 级别记
+    日志告警（企微告警链路在 Phase 2 多店资源管理中细化）。检查前先惰性清理
+    「注册表中已无活跃连接」的登记键，保证计数最终一致。
+
+    Args:
+        shop_id: 店铺业务标识。
+        user_id: 归属用户 ID。
+
+    Raises:
+        RuntimeError: 活跃 TikTok 通道数已达配置上限时抛出。
+    """
+    max_instances = get_settings().tiktok_max_browser_instances
+    if max_instances is None or max_instances <= 0:
+        return
+    # 惰性清理：登记键对应的连接已不在注册表 → 视为已释放。
+    stale = [
+        key for key in _TIKTOK_ACTIVE_KEYS
+        if connection_registry.get(key[0], key[1]) is None
+    ]
+    for key in stale:
+        _TIKTOK_ACTIVE_KEYS.discard(key)
+    if len(_TIKTOK_ACTIVE_KEYS) >= max_instances:
+        logger.error(
+            "TikTok 浏览器实例已达上限 %d 个，拒绝新连接: shop_id=%s, user_id=%s",
+            max_instances,
+            shop_id,
+            user_id,
+        )
+        raise RuntimeError(
+            f"TikTok 浏览器实例已达上限（{max_instances} 个），请先释放其它店铺连接"
+        )
+
+
 def create_channel(
     shop_id: str,
     shop_pk: int,
     user_id: int,
     *,
+    platform: str = PLATFORM_PDD,
     channel_name: str = "pinduoduo",
     enable_notify: bool = True,
     consumer: Optional[MessageConsumer] = None,
-) -> PDDChannel:
-    """创建一个「连接 + 消费器」已串联的 PDDChannel（不自动启动）。
+    proxy_server: Optional[str] = None,
+) -> ChannelAdapter:
+    """创建一个「连接 + 消费器」已串联的通道（不自动启动，按 platform 分派）。
 
     Args:
-        shop_id: 拼多多店铺业务标识。
+        shop_id: 店铺业务标识。
         shop_pk: 店铺主键 shop.id。
         user_id: 归属用户 ID。
+        platform: 平台标识（默认 PLATFORM_PDD）；非法平台回退 PDD 路径（向后
+            兼容，存量调用方缺省即走拼多多旧链路，零行为变更）。
         channel_name: 渠道名称（默认 pinduoduo）。
         enable_notify: 是否启用系统事件通知（经 backend HTTP 推送）。
         consumer: 可注入的消费器（便于测试）；缺省按本店铺构造。
+        proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 tiktok 分支建
+            浏览器会话时注入 BrowserSession；None 表示不走代理，PDD 分支不使用）。
 
     Returns:
-        已绑定消费器与独立 FIFO 队列的 PDDChannel 实例。
+        已按平台分派的通道实例（PDD 走 PDDChannel；tiktok 走 TikTokChannel 真实现，
+        TIK-014 联调落地）。
     """
+    # 平台校验：非法/缺省一律回退 PDD，保证向后兼容与 PDD 路径零行为变更。
+    if not is_allowed_platform(platform):
+        logger.warning("未知平台 '%s'，回退拼多多路径: shop_id=%s", platform, shop_id)
+        platform = PLATFORM_PDD
+
+    # TikTok 分支（TIK-014 联调真实现）：装配共享浏览器会话 + TikTokChannel +
+    # TikTokSender + 注入 TikTok 解析器的消费器，与 PDD 分支同款契约。
+    # 注意：本方法恒在 async 上下文内被调用（start_channel/start_enabled_channels/
+    # connect 路由），故可直接取到主循环注入 TikTokSender 的线程桥接。
+    if platform == PLATFORM_TIKTOK:
+        # 灰度总开关（TIK-017）：TIKTOK_SHOP_ENABLED=false 时直接拒绝 TikTok 连接
+        # 请求（抛错 → 路由规整为失败响应），防止灰度期误接入。
+        if not get_settings().tiktok_shop_enabled:
+            logger.warning(
+                "TikTok 通道未启用（TIKTOK_SHOP_ENABLED=false），拒绝连接请求: "
+                "shop_id=%s, user_id=%s",
+                shop_id,
+                user_id,
+            )
+            raise RuntimeError("TikTok 通道未启用（TIKTOK_SHOP_ENABLED=false）")
+
+        logger.info("创建 TikTok 真实通道: shop_id=%s, user_id=%s", shop_id, user_id)
+
+        # 工厂建一个浏览器会话（注入店铺出口代理，仅 TikTok 通道消费，Phase 2 前置），
+        # 同时注入 TikTokChannel 与 TikTokSender，避免两者各自自建第二份会话，
+        # 保证「发送与监控同页」。
+        browser_session = BrowserSession(shop_pk=shop_pk, proxy_server=proxy_server)
+
+        settings = get_settings()
+        # 发送器需与主循环桥接（线程内同步调用经 run_coroutine_threadsafe 调度回主循环）。
+        sender = TikTokSender(
+            shop_id=shop_id,
+            user_id=user_id,
+            browser_session=browser_session,
+            main_loop=asyncio.get_running_loop(),
+            send_timeout=settings.tiktok_send_timeout_seconds,
+        )
+
+        # 消费器：注入 TikTok 解析器与发送器（解析器绑定本店铺 shop_id）。
+        if consumer is None:
+            consumer = MessageConsumer(
+                shop_id=shop_id,
+                shop_pk=shop_pk,
+                user_id=user_id,
+                channel_name=channel_name,
+                message_parser=functools.partial(parse_tiktok_raw, shop_id=shop_id),
+                sender=sender,
+                notifier=build_notifier(shop_pk) if enable_notify else None,
+            )
+
+        # 为本店铺分配独立 FIFO 队列（与 PDD 分支同款键约定）。
+        queue = message_queue_manager.get_or_create(f"{user_id}:{shop_id}")
+
+        # 连接断开 / 登录失效告警通知器（复用全局去重单例，与 PDD 分支同款语义）。
+        event_notifier = build_alert_notifier(
+            get_alert_dedup(),
+            shop_pk,
+            send_cb=None,
+        )
+
+        # 消息消费回调：原始报文交消费器处理（handler(raw, shop_id, user_id) 签名
+        # 与 TikTokChannel 消费循环一致，直接复用）。
+        message_handler = build_message_handler(consumer)
+
+        channel = TikTokChannel(
+            shop_id=shop_id,
+            user_id=user_id,
+            shop_pk=shop_pk,
+            message_queue=queue,
+            message_handler=message_handler,
+            browser_session=browser_session,
+            event_notifier=event_notifier,
+            poll_interval=settings.tiktok_poll_interval_seconds,
+            debounce_seconds=settings.tiktok_debounce_seconds,
+            sender=sender,
+        )
+        return channel
+
+    # PDD 分支（存量路径，逐字节零行为变更）：以下逻辑与 TIK-005 交付完全一致。
     if consumer is None:
         consumer = MessageConsumer(
             shop_id=shop_id,
@@ -90,12 +231,22 @@ def create_channel(
     # 为本店铺分配独立 FIFO 队列（入队顺序 == 消费顺序，需求 5.3）。
     queue = message_queue_manager.get_or_create(f"{user_id}:{shop_id}")
 
+    # TIK-005：注入「连接断开告警」事件通知器。复用全局去重单例，按 shop_pk 维度
+    # 防抖（默认 30 分钟静默）。Webhook 地址暂未提供，send_cb 缺省为 None，仅日志
+    # 占位；事件类型为 connection_disconnected，与 cookies 刷新失败链路共用同一定义。
+    event_notifier = build_alert_notifier(
+        get_alert_dedup(),
+        shop_pk,
+        send_cb=None,
+    )
+
     channel = PDDChannel(
         shop_id=shop_id,
         user_id=user_id,
         channel_name=channel_name,
         message_queue=queue,
         message_handler=build_message_handler(consumer),
+        event_notifier=event_notifier,
     )
     return channel
 
@@ -105,20 +256,25 @@ async def start_channel(
     shop_pk: int,
     user_id: int,
     *,
+    platform: str = PLATFORM_PDD,
     channel_name: str = "pinduoduo",
     enable_notify: bool = True,
-) -> PDDChannel:
-    """创建、启动并登记一个店铺连接（端到端链路就绪，需求 5.1 / 5.3）。
+    proxy_server: Optional[str] = None,
+) -> ChannelAdapter:
+    """创建、启动并登记一个店铺连接（端到端链路就绪，按 platform 分派）。
 
     Args:
-        shop_id: 拼多多店铺业务标识。
+        shop_id: 店铺业务标识。
         shop_pk: 店铺主键 shop.id。
         user_id: 归属用户 ID。
+        platform: 平台标识（默认 PLATFORM_PDD）；缺省走拼多多旧链路，零变更。
         channel_name: 渠道名称（默认 pinduoduo）。
         enable_notify: 是否启用系统事件通知。
+        proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 tiktok 分支消费，
+            透传给 create_channel → BrowserSession；None 表示不走代理）。
 
     Returns:
-        已启动并登记到连接注册表的 PDDChannel 实例。
+        已启动并登记到连接注册表的通道实例（PDD / TikTok 真实现按平台分派）。
     """
     # 幂等保护：同店铺已有活跃连接则跳过，避免重复建连（参照项目 is_running 判断）。
     existing = connection_registry.get(shop_id, user_id)
@@ -128,16 +284,29 @@ async def start_channel(
         )
         return existing
 
+    # TikTok 并发实例上限检查（TIK-017）：超限抛错，由调用方规整为失败响应。
+    if platform == PLATFORM_TIKTOK:
+        _enforce_tiktok_limit(shop_id, user_id)
+
     channel = create_channel(
         shop_id,
         shop_pk,
         user_id,
+        platform=platform,
         channel_name=channel_name,
         enable_notify=enable_notify,
+        proxy_server=proxy_server,
     )
     await channel.start()
     connection_registry.register(shop_id, user_id, channel)
-    logger.info("店铺连接已启动并登记: shop_id=%s, user_id=%s", shop_id, user_id)
+    if platform == PLATFORM_TIKTOK:
+        _TIKTOK_ACTIVE_KEYS.add((shop_id, user_id))
+    logger.info(
+        "店铺连接已启动并登记: shop_id=%s, user_id=%s, platform=%s",
+        shop_id,
+        user_id,
+        platform,
+    )
     return channel
 
 
@@ -152,7 +321,9 @@ async def start_enabled_channels() -> int:
         本次实际新启动的店铺连接数量。
     """
     # 一次性读出启用店铺的最小必要字段（独立短事务，读完即释放连接）。
-    shops: list[tuple[str, int, Optional[int]]] = []
+    # 读出启用店铺的（shop_id, shop_pk, owner_user_id, platform, proxy_server）
+    # 最小必要字段（proxy_server 为 Phase 2 前置店铺级代理，仅 TikTok 通道消费）。
+    shops: list[tuple[str, int, Optional[int], str, Optional[str]]] = []
     try:
         with session_scope() as session:
             enabled_shops = Repository(Shop, session).list(
@@ -162,7 +333,15 @@ async def start_enabled_channels() -> int:
                 shop_id = str(shop.shop_id or "").strip()
                 if not shop_id:
                     continue
-                shops.append((shop_id, shop.id, shop.owner_user_id))
+                # 读出店铺平台（存量列缺省 'pdd'；空值回退拼多多，向后兼容）。
+                shop_platform = str(getattr(shop, "platform", None) or PLATFORM_PDD).strip()
+                if not is_allowed_platform(shop_platform):
+                    shop_platform = PLATFORM_PDD
+                # 店铺出口代理（空串 / 缺失归一为 None = 不走代理）。
+                proxy_server = str(getattr(shop, "proxy_server", None) or "").strip() or None
+                shops.append(
+                    (shop_id, shop.id, shop.owner_user_id, shop_platform, proxy_server)
+                )
     except Exception as exc:  # noqa: BLE001 - 读库失败不应中断服务启动
         logger.error("读取启用店铺列表失败，跳过自动启动连接: %s", exc)
         return 0
@@ -173,9 +352,15 @@ async def start_enabled_channels() -> int:
 
     logger.info("服务启动：开始自动拉起 %d 个已启用店铺的连接", len(shops))
     started = 0
-    for shop_id, shop_pk, owner_user_id in shops:
+    for shop_id, shop_pk, owner_user_id, shop_platform, proxy_server in shops:
         try:
-            await start_channel(shop_id, shop_pk, owner_user_id)
+            await start_channel(
+                shop_id,
+                shop_pk,
+                owner_user_id,
+                platform=shop_platform,
+                proxy_server=proxy_server,
+            )
             started += 1
         except Exception as exc:  # noqa: BLE001 - 单店铺启动失败不影响其它店铺
             logger.error("自动启动店铺连接失败: shop_id=%s, %s", shop_id, exc)

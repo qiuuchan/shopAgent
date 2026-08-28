@@ -40,9 +40,7 @@ from typing import Any, Callable, Dict, List, Optional
 from agent import ai_reply_engine
 from agent.agent_config import AgentConfig
 from agent.goods_card_fallback import build_goods_text, resolve_goods_card_reply
-from channel_pdd.api.send_message import SendMessage
-from channel_pdd.pdd_message import Context, ContextType, PDDChatMessage
-from channel_pdd.transfer_service import TransferService
+from channel_pdd.pdd_message import Context, ContextType
 from channel_pdd.chat_event_forwarder import forward_new_message
 from sqlalchemy import or_, select
 from common.db.repository import Repository, run_in_session
@@ -226,6 +224,7 @@ def load_shop_runtime(shop_pk: int, session: Any) -> ShopRuntime:
         business_enabled=bool(_attr(business, "enabled", True)) if business else True,
         business_start=_attr(business, "start_time") if business else None,
         business_end=_attr(business, "end_time") if business else None,
+        business_weekdays=_attr(business, "weekdays") if business else None,
         risk_enabled=bool(_attr(risk, "enabled", True)) if risk else False,
         session_reply_limit=_attr(risk, "session_reply_limit") if risk else None,
         shop_reply_limit=_attr(risk, "shop_reply_limit") if risk else None,
@@ -261,6 +260,9 @@ ChatMessageWriter = Callable[[Dict[str, Any]], None]
 # 会话历史读取器：入参为 (shop_pk, customer_uid, limit)，返回按时间正序的历史消息
 # 字典列表（每项含 direction / content）。
 ChatHistoryReader = Callable[[int, str, int], List[Dict[str, Any]]]
+# 消息解析器：把一条原始报文解析为统一 Context；无法解析返回 None（TIK-008）。
+# 类型定义为字符串注解以规避模块级对 engine.message_parser 的硬依赖（按需惰性导入）。
+MessageParser = "Callable[[Any], Optional[Context]]"
 # 默认回复「只回复一次」记录读 / 写器：入参为 (shop_pk, customer_uid)。
 # 读器返回该客户在本店铺是否已收到过默认回复；写器登记一次「已回复」事实。
 DefaultReplyRecordReader = Callable[[int, str], bool]
@@ -282,8 +284,9 @@ class MessageConsumer:
         *,
         channel_name: str = "pinduoduo",
         runtime_loader: Optional[RuntimeLoader] = None,
-        sender: Optional[SendMessage] = None,
-        transfer_service: Optional[TransferService] = None,
+        sender: Optional["SendMessage"] = None,
+        transfer_service: Optional["TransferService"] = None,
+        message_parser: "Optional[MessageParser]" = None,
         log_writer: Optional[LogWriter] = None,
         risk_log_writer: Optional[RiskLogWriter] = None,
         notifier: Optional[Notifier] = None,
@@ -305,6 +308,8 @@ class MessageConsumer:
             runtime_loader: 运行时配置加载器（缺省经 common 仓储从库读取）。
             sender: 拼多多消息发送器（缺省自建 SendMessage）。
             transfer_service: 转人工服务（缺省自建 TransferService）。
+            message_parser: 原始报文解析器（缺省惰性取 pdd_parse_raw，保持 PDD
+                默认行为；TikTok 等平台可注入各自解析器复用本消费链路，TIK-008）。
             log_writer: 消息日志写入器（缺省经 common 仓储落库）。
             risk_log_writer: 风控日志写入器（缺省经 common 仓储落库）。
             notifier: 系统事件通知器（缺省尽力而为调 backend，失败不影响主流程）。
@@ -321,6 +326,9 @@ class MessageConsumer:
         self._runtime_loader = runtime_loader or self._default_runtime_loader
         self._sender = sender
         self._transfer_service = transfer_service
+        # 消息解析器：缺省惰性取 PDD 解析器（避免模块级硬依赖，确保启动时序与
+        # 原有行为一致；注入非空 parser 时优先使用，供 TikTok 等平台复用全链路）。
+        self._message_parser = message_parser
         self._log_writer = log_writer or self._default_log_writer
         self._risk_log_writer = risk_log_writer or self._default_risk_log_writer
         self._notifier = notifier
@@ -402,21 +410,37 @@ class MessageConsumer:
     def _to_context(self, raw_message: Any) -> Optional[Context]:
         """将原始报文解析为 Context（不做业务过滤），无法解析时返回 None。
 
+        委托给注入的 ``message_parser``（TIK-008）：缺省惰性取 ``pdd_parse_raw``，
+        保持与原 ``_to_context`` 逐字节等价的 PDD 默认行为。解析器契约
+        （Context 直传 / 字节解码 / JSON 解析 / 非字典返回 None / 角色归一化）
+        见 ``engine.message_parser``。
+
         Args:
             raw_message: 原始报文（Context / 字节 / JSON 字符串 / 字典）。
 
         Returns:
             解析得到的 Context；非字典 / 无法解析返回 None。
         """
-        if isinstance(raw_message, Context):
-            return raw_message
-        if isinstance(raw_message, (bytes, bytearray)):
-            raw_message = raw_message.decode("utf-8", errors="ignore")
-        if isinstance(raw_message, str):
-            raw_message = json.loads(raw_message)
-        if not isinstance(raw_message, dict):
-            return None
-        return PDDChatMessage(raw_message).to_context(shop_id=self.shop_id)
+        parser = self._message_parser or self._default_message_parser()
+        return parser(raw_message)
+
+    def _default_message_parser(self) -> "MessageParser":
+        """惰性获取 PDD 默认消息解析器（避免模块级对 pdd_parse_raw 的硬依赖）。
+
+        返回一个绑定了本店铺 ``shop_id`` 的解析器闭包，语义与原 ``_to_context``
+        逐字节等价（角色归一化由 ``PDDChatMessage`` 完成）。
+
+        Returns:
+            一个 PDD 解析器（``Callable[[Any], Optional[Context]]``）。
+        """
+        from engine.message_parser import pdd_parse_raw
+
+        shop_id = self.shop_id
+
+        def _parse(raw_message: Any) -> Optional[Context]:
+            return pdd_parse_raw(raw_message, shop_id=shop_id)
+
+        return _parse
 
     # ------------------------------------------------------------------
     # 处理：转人工 → 决策链 → AI/降级 → 发送 → 落库
@@ -889,9 +913,11 @@ class MessageConsumer:
     # ------------------------------------------------------------------
     # 延迟构造的外部依赖
     # ------------------------------------------------------------------
-    def _get_sender(self) -> SendMessage:
+    def _get_sender(self) -> "SendMessage":
         """获取（或惰性构造）拼多多消息发送器。"""
         if self._sender is None:
+            from channel_pdd.api.send_message import SendMessage
+
             self._sender = SendMessage(
                 shop_id=self.shop_id,
                 user_id=self.user_id,
@@ -899,9 +925,11 @@ class MessageConsumer:
             )
         return self._sender
 
-    def _get_transfer_service(self) -> TransferService:
+    def _get_transfer_service(self) -> "TransferService":
         """获取（或惰性构造）转人工 / 商品卡片服务。"""
         if self._transfer_service is None:
+            from channel_pdd.transfer_service import TransferService
+
             self._transfer_service = TransferService(
                 shop_id=self.shop_id,
                 user_id=self.user_id,
