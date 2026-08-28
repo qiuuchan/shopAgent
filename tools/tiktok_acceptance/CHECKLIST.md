@@ -10,8 +10,10 @@
       - 2026-08-28 已实测完成：账号 18023103936 登录成功（免登复用），店铺 id=1 落库
       - 登录态目录：`websocket/browser_data/tiktok_367516054`（已落库 Shop.browser_data_dir，连接自动复用）
       - 说明：首次登录 TikTok 强制短信验证码（平台风控），登录成功后目录持久化免登
-- [x] A2. ~~配置企微告警~~ **已决定跳过（2026-08-28）**：暂无企微群机器人，周末验收以
-      `pdd_notify_record` 落库为准（告警会记录在案），企微投递联调放 Phase 2
+- [x] A2. 配置企微告警（**2026-08-28 已配通**）：
+      - 群机器人 webhook（企微新版入口名「消息推送」，管理员后台「应用管理 → 消息推送」开通后可见）
+      - 已创建 `notify_channel` id=1（wecom，店铺 1，enabled）并实测：测试发送 + `connection_disconnected`
+        事件均 success 且企微群实收（errcode=0）；`send_via_channel` 已按企微 msgtype/text 协议适配并校验 errcode
 - [x] A3. 确认 `tiktok_window` 定时任务存在且启用（backend 启动时按内置种子自动补齐，管理端 `/admin/scheduled-tasks` 检查即可）：
       - task_key = `tiktok_window`，schedule_type = `interval`，schedule_config = `60`（秒），enabled = true
       - 若缺失：确认 backend 已启动并访问过一次任务列表页（触发幂等补齐）
@@ -34,10 +36,10 @@
 
 ## C. 告警演练（窗口内，选一个非值守时段）
 
-- [ ] C1. 演练 A（connection_disconnected）：杀掉浏览器进程 → 告警落库 `pdd_notify_record`（企微投递未配，Phase 2 联调）
+- [ ] C1. 演练 A（connection_disconnected）：杀掉浏览器进程 → 企微群收到 `connection_disconnected` 告警，且 `pdd_notify_record` 落库 success
 - [ ] C2. 演练 B（login_expired）：停服务 → 删除/改名 `websocket_browser_data/tiktok_<pk>` → 重启服务 → `login_expired` 事件落库
 - [ ] C3. 静默窗口验证：保持故障 5 分钟无第二条同事件记录；恢复后再次故障可再告警
-- [ ] C4. 复核落库：`pdd_notify_record` 有对应事件成功记录（企微渠道未配时检查 send_result 记录仍存在）
+- [ ] C4. 复核落库：`pdd_notify_record` 有对应事件 success 记录，且企微群实收（渠道已配通）
 
 ## D. 营业时间窗口验证
 

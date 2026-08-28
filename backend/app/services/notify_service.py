@@ -177,7 +177,12 @@ def send_via_channel(
         return False, "通知目标地址未配置"
 
     if channel_type in ("webhook", "wecom"):
-        payload = json.dumps({"content": content}, ensure_ascii=False).encode("utf-8")
+        # 企业微信群机器人 webhook 要求 msgtype/text 协议；通用 webhook 保持
+        # 纯文本 {"content": ...} 兼容常见消息网关（2026-08-28 实测企微要求）。
+        body: Dict[str, Any] = {"content": content}
+        if channel_type == "wecom":
+            body = {"msgtype": "text", "text": {"content": content}}
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             str(target).strip(),
             data=payload,
@@ -189,9 +194,22 @@ def send_via_channel(
                 request, timeout=_SEND_TIMEOUT_SECONDS
             ) as resp:
                 status = getattr(resp, "status", resp.getcode())
-                if 200 <= int(status) < 300:
-                    return True, "发送成功"
-                return False, f"渠道返回非 2xx 状态码：{status}"
+                if not (200 <= int(status) < 300):
+                    return False, f"渠道返回非 2xx 状态码：{status}"
+                # 企微等网关对业务失败（key 失效 / 消息格式错）仍返回 2xx，
+                # 读取响应体 errcode 判别真实成败，避免落库误报成功（2026-08-28
+                # 实测企微正常返回 {"errcode":0,"errmsg":"ok"}）。
+                body_json: Optional[Dict[str, Any]] = None
+                try:
+                    body_json = json.loads(resp.read().decode("utf-8"))
+                except (UnicodeDecodeError, ValueError, OSError):
+                    body_json = None
+                if isinstance(body_json, dict):
+                    errcode = body_json.get("errcode")
+                    if errcode is not None and int(errcode) != 0:
+                        errmsg = body_json.get("errmsg")
+                        return False, f"渠道返回业务错误：{errmsg or errcode}"
+                return True, "发送成功"
         except (urllib.error.URLError, OSError, ValueError) as exc:
             # 网络不可达 / 超时 / 解析错误：转为失败返回，绝不向上抛出。
             return False, f"渠道发送失败：{exc}"

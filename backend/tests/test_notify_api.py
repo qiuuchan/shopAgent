@@ -20,6 +20,9 @@ app.services.notify_service）进行单元测试，覆盖需求 18（通知渠�
 """
 from __future__ import annotations
 
+import json
+import urllib.request
+
 import pytest
 
 from app.core.business_codes import CODE_FORBIDDEN, MSG_FORBIDDEN
@@ -306,6 +309,110 @@ def test_notify_access_denied_for_unauthorized(client, notify_env):
 # ----------------------------------------------------------------------
 # 服务层测试
 # ----------------------------------------------------------------------
+def test_send_via_channel_wecom_uses_qyapi_payload(monkeypatch):
+    """企微渠道按群机器人协议封装 msgtype/text（企微 webhook 要求）。
+
+    2026-08-28 实测：企微群机器人仅接受
+    ``{"msgtype":"text","text":{"content":...}}``，纯 ``{"content":...}`` 会被
+    拒绝；通用 webhook 渠道仍保持纯文本格式不变。
+    """
+    captured: dict = {}
+
+    class _FakeResp:
+        status = 200
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return b'{"errcode":0,"errmsg":"ok"}'
+
+        def __enter__(self) -> "_FakeResp":
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+    def _fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = request.data.decode("utf-8")
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    ok, detail = notify_service.send_via_channel(
+        "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake", "你好"
+    )
+    assert ok is True, detail
+    assert captured["url"].startswith("https://qyapi.weixin.qq.com/cgi-bin/webhook")
+    assert json.loads(captured["body"]) == {
+        "msgtype": "text",
+        "text": {"content": "你好"},
+    }
+
+
+def test_send_via_channel_webhook_keeps_plain_payload(monkeypatch):
+    """通用 webhook 渠道保持纯文本载荷 {\"content\": ...} 不变。"""
+    captured: dict = {}
+
+    class _FakeResp:
+        status = 200
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return b'{"errcode":0,"errmsg":"ok"}'
+
+        def __enter__(self) -> "_FakeResp":
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+    def _fake_urlopen(request, timeout=None):
+        captured["body"] = request.data.decode("utf-8")
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    ok, detail = notify_service.send_via_channel("webhook", "https://a.com/hook", "你好")
+    assert ok is True, detail
+    assert json.loads(captured["body"]) == {"content": "你好"}
+
+
+def test_send_via_channel_wecom_business_error_detected(monkeypatch):
+    """企微网关业务失败（key 失效/消息格式错）仍返回 2xx，须按 errcode 判失败。
+
+    2026-08-28 实测：企微 webhook 对无效 key 返回 HTTP 200 但 body 带
+    errcode!=0，仅看状态码会误报成功导致告警落库失真。
+    """
+
+    class _FakeResp:
+        status = 200
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return b'{"errcode":93000,"errmsg":"invalid webhook url, hint: fake"}'
+
+        def __enter__(self) -> "_FakeResp":
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda request, timeout=None: _FakeResp(),
+    )
+    ok, detail = notify_service.send_via_channel(
+        "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=bad", "你好"
+    )
+    assert ok is False
+    assert "业务错误" in detail
+
+
 def test_service_test_channel_records_failure(db_session, notify_env, monkeypatch):
     """服务层：测试发送失败写入失败结果的通知记录（需求 18.4）。"""
     channel = NotifyChannel(

@@ -38,7 +38,7 @@
 1. 测试店账号已人工登录一次（user-data-dir 登录态有效，二次免登通过）；
 2. 生产 `.env`：`TIKTOK_SHOP_ENABLED=true`，其余 `TIKTOK_*` 按需调整；
 3. 管理端 `/admin/scheduled-tasks` 存在启用中的 `tiktok_window` 任务（backend 启动后按内置种子幂等补齐，页面仅支持编辑/启停；确认 schedule_config=60、enabled=true）；
-4. 店铺已启用企微通知渠道（`notify` 配置），企微群机器人可收到消息；**未配企微时可跳过**（2026-08-28 决定：暂无企微群，验收以 `pdd_notify_record` 落库为准，企微投递联调放 Phase 2）；
+4. 店铺已启用企微通知渠道（`notify` 配置），企微群机器人可收到消息（**2026-08-28 已配通**：notify_channel id=1 wecom/店铺1，实测测试发送与 `connection_disconnected` 事件均 success 且企微实收；企微新版群机器人入口名为「消息推送」，需管理员后台「应用管理 → 消息推送」开通创建权限）；
 5. 营业时间为周末实际值守窗口（BusinessHoursPanel 已配 weekdays，TIK-006/007 交付）。
 
 ## 4. 验收标准逐条演练
@@ -108,6 +108,6 @@
 ## 5. 常见问题
 
 - **对账数字对不上**：先确认窗口口径（北京时间）与店铺 pk；再确认 `TIKTOK_SHOP_ENABLED` 与店铺启用状态（未启用不连不落库）；
-- **告警没收到**：查 `pdd_notify_record` 是否落库（落库未达企微 = 渠道配置问题；未落库 = 事件未触发，检查通道状态与 AlertDedup 静默窗口）；
+- **告警没收到**：查 `pdd_notify_record` 是否落库（落库 success 未达企微 = 渠道配置/网络问题，复查 webhook key 是否失效——企微对失效 key 返回 errcode≠0，系统按业务错误记 failed；未落库 = 事件未触发，检查通道状态与 AlertDedup 静默窗口）；
 - **`--db` sqlite 验证**：sqlite 下 BigInteger 不自增，需先用 `tools/tests/conftest.py` 的方言适配建表再插数；
 - **周末窗口对账**：验收 1/2 建议用 `--json` 输出留存，作为验收记录附件。
