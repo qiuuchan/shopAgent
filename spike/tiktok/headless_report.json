@@ -1,0 +1,40 @@
+{
+  "结论": "headless 可用（无风控/验证码触发）",
+  "实例数": 3,
+  "平均常驻内存_MB": 76.7,
+  "合计常驻内存_MB": 230.1,
+  "detail": {
+    "single": {
+      "headless": true,
+      "pid": 19692,
+      "memory_before_mb": 51.3,
+      "memory_after_mb": 75.4,
+      "cpu_percent_samples": [],
+      "final_url": "https://seller.tiktokshopglobalselling.com/homepage?shop_region=TH",
+      "risk_by_url": false,
+      "captcha_visible": false
+    },
+    "concurrent": [
+      {
+        "headless": true,
+        "pid": 16724,
+        "memory_before_mb": 52.3,
+        "memory_after_mb": 77.6,
+        "cpu_percent_samples": [],
+        "final_url": "https://seller.tiktokshopglobalselling.com/homepage?shop_region=TH",
+        "risk_by_url": false,
+        "captcha_visible": false
+      },
+      {
+        "headless": true,
+        "pid": 16724,
+        "memory_before_mb": 51.6,
+        "memory_after_mb": 77.1,
+        "cpu_percent_samples": [],
+        "final_url": "https://seller.tiktokshopglobalselling.com/homepage?shop_region=TH",
+        "risk_by_url": false,
+        "captcha_visible": false
+      }
+    ]
+  }
+}

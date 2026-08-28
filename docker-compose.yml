@@ -149,6 +149,9 @@ services:
     image: pdd_websocket
     container_name: pdd_websocket
     restart: unless-stopped
+    # 内存上限：承载 Playwright 浏览器实例（s5 实测单实例 ≈75MB、4 店 ≈300MB），
+    # 预留 PDD 长连接 / Python / 系统缓冲余量，2G 封顶防单容器拖垮宿主机（TIK-017）。
+    mem_limit: 2g
     depends_on:
       mysql:
         condition: service_healthy
@@ -182,6 +185,13 @@ services:
       MAX_CAPTCHA_CONCURRENT: ${MAX_CAPTCHA_CONCURRENT:-1}
       # Playwright 持久化用户数据目录，须与下方挂载卷一致，确保容器重建后登录态不丢失
       PLAYWRIGHT_USER_DATA_DIR: ${PLAYWRIGHT_USER_DATA_DIR:-/app/websocket/browser_data}
+      # —— TikTok 店铺通道配置（TIK-017；灰度总开关默认关闭）——
+      TIKTOK_SHOP_ENABLED: ${TIKTOK_SHOP_ENABLED:-false}
+      TIKTOK_POLL_INTERVAL_SECONDS: ${TIKTOK_POLL_INTERVAL_SECONDS:-5.0}
+      TIKTOK_DEBOUNCE_SECONDS: ${TIKTOK_DEBOUNCE_SECONDS:-45.0}
+      TIKTOK_SEND_TIMEOUT_SECONDS: ${TIKTOK_SEND_TIMEOUT_SECONDS:-15.0}
+      TIKTOK_LOGIN_WAIT_TIMEOUT_MS: ${TIKTOK_LOGIN_WAIT_TIMEOUT_MS:-120000}
+      TIKTOK_MAX_BROWSER_INSTANCES: ${TIKTOK_MAX_BROWSER_INSTANCES:-4}
     ports:
       - "${WEBSOCKET_PORT:-8090}:8090"
     volumes:

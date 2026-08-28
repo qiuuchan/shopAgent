@@ -104,3 +104,7 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ===== spike 探查产物（含登录态与浏览器数据，禁止提交） =====
+spike/tiktok/_data/
+spike/tiktok/__pycache__/

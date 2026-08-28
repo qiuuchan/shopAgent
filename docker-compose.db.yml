@@ -1,0 +1,57 @@
+# docker-compose.db.yml —— 仅本地二开使用：MySQL + Redis 基础件
+# Python 服务与前端在宿主机直接运行，故端口映射到 127.0.0.1。
+# 用法：docker compose -f docker-compose.db.yml up -d
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: pdd_mysql
+    restart: unless-stopped
+    command:
+      - --default-time-zone=+08:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-pdd_root_2026}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-pdd_auto_reply}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_HOST_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_PASSWORD:-pdd_root_2026}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: pdd_redis
+    restart: unless-stopped
+    command: >
+      sh -c "if [ -n \"$$REDIS_PASSWORD\" ]; then
+               redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes;
+             else
+               redis-server --appendonly yes;
+             fi"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-pdd_redis_2026}
+      TZ: Asia/Shanghai
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local

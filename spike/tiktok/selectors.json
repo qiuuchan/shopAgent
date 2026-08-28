@@ -1,0 +1,16 @@
+{
+  "chat_url": "https://seller.tiktokshopglobalselling.com/chat/inbox/current?oec_seller_id=7494494994748966018&shop_region=TH&lang=en&cb_shop_region=TH&from=seller_center_navigation_im",
+  "stable": {
+    "unread_badge": ".p-badge"
+  },
+  "candidates": {
+    "conversation_item": [],
+    "unread_badge": [
+      ".p-badge"
+    ],
+    "message_input": [],
+    "send_button": [],
+    "message_list": [],
+    "my_message_bubble": []
+  }
+}

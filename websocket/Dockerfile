@@ -23,8 +23,10 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 WORKDIR /app
 
-# 安装基础系统依赖：curl（健康检查）、ca 证书、gcc（部分依赖需编译）
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gcc \
+# 安装基础系统依赖：curl（健康检查）、ca 证书、gcc（部分依赖需编译）。
+# 额外安装中文字体 fonts-noto-cjk：TikTok 泰国站卖家后台为中文界面，headless
+# 渲染 / 截图 / 选择器匹配需字体支持（TIK-017，s5 结论 headless 可用、无需 Xvfb）。
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gcc fonts-noto-cjk \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
