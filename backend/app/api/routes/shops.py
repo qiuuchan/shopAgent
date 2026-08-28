@@ -35,8 +35,14 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core import permission
-from app.core.business_codes import CODE_FORBIDDEN, MSG_FORBIDDEN
+from app.core.business_codes import CODE_FORBIDDEN, CODE_PARAM_ERROR, MSG_FORBIDDEN
+from app.core.errors import BusinessError
 from app.services import account_service
+from app.services.account_service import (
+    DEFAULT_PLATFORM,
+    validate_platform,
+    validate_proxy_server,
+)
 from common.db.session import get_db
 from common.models.user_models import SysUser
 from common.schemas.common import ApiResponse, error_response
@@ -85,6 +91,14 @@ class UpsertShopRequest(BaseModel):
     cookies: Optional[str] = Field(None, description="登录 Cookie 明文（加密存储）")
     username: Optional[str] = Field(None, description="拼多多登录账号")
     password: Optional[str] = Field(None, description="账号密码明文（加密存储）")
+    platform: str = Field(
+        DEFAULT_PLATFORM, description="店铺所属平台（pdd=拼多多 / tiktok=TikTok Shop，默认 pdd）"
+    )
+    proxy_server: Optional[str] = Field(
+        None,
+        description="店铺出口代理服务器地址（如 http://host:port 或 socks5://host:port，"
+        "空串=清空不走代理，仅 TikTok 通道建浏览器会话时消费）",
+    )
 
 
 class UpdateShopRequest(BaseModel):
@@ -100,6 +114,10 @@ class UpdateShopRequest(BaseModel):
     username: Optional[str] = Field(None, description="新登录账号（反显后可编辑）")
     cookies: Optional[str] = Field(None, description="新 Cookie 明文（反显后可编辑，加密存储）")
     password: Optional[str] = Field(None, description="新账号密码明文（反显后可编辑，加密存储）")
+    proxy_server: Optional[str] = Field(
+        None,
+        description="新出口代理服务器地址（None=不改；空串=清空不走代理；仅 TikTok 通道消费）",
+    )
 
 
 class PasswordLoginShopRequest(BaseModel):
@@ -112,6 +130,9 @@ class PasswordLoginShopRequest(BaseModel):
     username: str = Field(..., description="拼多多商家后台登录账号")
     password: str = Field(..., description="拼多多商家后台登录密码")
     remark: Optional[str] = Field(None, description="备注")
+    platform: str = Field(
+        DEFAULT_PLATFORM, description="店铺所属平台（pdd=拼多多 / tiktok=TikTok Shop，默认 pdd）"
+    )
 
 
 class CookieImportShopRequest(BaseModel):
@@ -141,6 +162,16 @@ def upsert_shop(
     denied = _ensure_permission(current_user, "create", db)
     if denied is not None:
         return denied
+    # 平台标识校验：非法枚举抛 BusinessError，由统一处理器兜底为 HTTP 200（不抛 4xx/5xx）。
+    try:
+        platform = validate_platform(payload.platform)
+    except ValueError as exc:
+        raise BusinessError(CODE_PARAM_ERROR, str(exc))
+    # 出口代理校验：非法地址抛 BusinessError（空 / None 合法，归一为不走代理）。
+    try:
+        validate_proxy_server(payload.proxy_server)
+    except ValueError as exc:
+        raise BusinessError(CODE_PARAM_ERROR, str(exc))
     return account_service.upsert_shop(
         db,
         shop_id=payload.shop_id,
@@ -152,6 +183,9 @@ def upsert_shop(
         cookies=payload.cookies,
         username=payload.username,
         password=payload.password,
+        platform=platform,
+        # 透传原始值：service 层据此区分 None（不改）与空串（清空）。
+        proxy_server=payload.proxy_server,
         operator_id=current_user.id,
     )
 
@@ -175,12 +209,18 @@ def login_shop_by_password(
     denied = _ensure_permission(current_user, "create", db)
     if denied is not None:
         return denied
+    # 平台标识校验：非法枚举抛 BusinessError，由统一处理器兜底为 HTTP 200（不抛 4xx/5xx）。
+    try:
+        platform = validate_platform(payload.platform)
+    except ValueError as exc:
+        raise BusinessError(CODE_PARAM_ERROR, str(exc))
     return account_service.login_shop_by_password(
         db,
         username=payload.username,
         password=payload.password,
         owner_user_id=current_user.id,
         remark=payload.remark,
+        platform=platform,
         operator_id=current_user.id,
     )
 
@@ -268,6 +308,11 @@ def update_shop(
     denied = _ensure_permission(current_user, "update", db)
     if denied is not None:
         return denied
+    # 出口代理校验：非法地址抛 BusinessError（None=不改，空串=清空）。
+    try:
+        validate_proxy_server(payload.proxy_server)
+    except ValueError as exc:
+        raise BusinessError(CODE_PARAM_ERROR, str(exc))
     return account_service.update_shop(
         db,
         shop_pk,
@@ -276,6 +321,8 @@ def update_shop(
         shop_name=payload.shop_name,
         shop_logo=payload.shop_logo,
         channel_id=payload.channel_id,
+        # 透传原始值：service 层据此区分 None（不改）与空串（清空）。
+        proxy_server=payload.proxy_server,
         enabled=payload.enabled,
         username=payload.username,
         cookies=payload.cookies,

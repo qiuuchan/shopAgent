@@ -7,6 +7,9 @@ WebSocket 能力将消息发送至对应客户会话。按设计「多服务拆�
 维护与拼多多的长连接，而是通过 **HTTP 调用** websocket 服务的发送接口完成下发，地址
 经环境变量 ``WEBSOCKET_SERVICE_URL`` 配置，**禁止写死 localhost**（规范 21）。
 
+平台分派：发送请求不区分平台，websocket 侧按 ``Shop.platform`` 自行分派
+（PDD SendMessage / TikTok 活跃通道 DOM 发送，TIK-016 Phase 2 已支持）。
+
 发送结果统一规整为 ``ManualSendResult``：
 - ``ok``：是否发送成功（websocket 服务回报已下发）。
 - ``message``：失败原因（中文）；成功时为空字符串。
@@ -58,11 +61,12 @@ def send_manual_message(
 
     地址由环境变量配置（禁止写死 localhost）。无论 websocket 服务是否可达，本函数
     都不抛异常：成功返回 ok=True；失败返回 ok=False 并附中文原因，由调用方据此
-    记录消息日志（发送成功 / 失败均需记日志）。
+    记录消息日志（发送成功 / 失败均需记日志）。平台分派由 websocket 侧按
+    ``Shop.platform`` 完成（TIK-016 Phase 2：TikTok 已支持在线手动发送）。
 
     Args:
         shop_pk: 店铺主键（shop.id）。
-        shop_id: 拼多多店铺业务标识。
+        shop_id: 店铺业务标识。
         owner_user_id: 店铺归属用户 ID（用于 websocket 侧定位连接 / 凭据）。
         recipient_uid: 接收消息的客户唯一标识。
         content: 待发送的文本内容。

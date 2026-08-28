@@ -177,7 +177,7 @@ def test_disable_shop_soft_deletes_and_notifies_disconnect(
     # 打桩断连通知，记录是否被调用，避免真实网络请求。
     called = {}
 
-    def _fake_notify(shop_pk, shop_id, owner_user_id):
+    def _fake_notify(shop_pk, shop_id, owner_user_id, **kwargs):
         called["args"] = (shop_pk, shop_id, owner_user_id)
         return True
 
@@ -221,7 +221,7 @@ def test_upsert_shop_notifies_connect_when_enabled(
     # 打桩启动连接通知，记录调用参数（覆盖 autouse 桩以断言）。
     called = {}
 
-    def _fake_connect(shop_pk, shop_id, owner_user_id):
+    def _fake_connect(shop_pk, shop_id, owner_user_id, **kwargs):
         called["args"] = (shop_pk, shop_id, owner_user_id)
         return True
 
@@ -251,7 +251,7 @@ def test_update_shop_enable_notifies_connect(
 
     called = {}
 
-    def _fake_connect(shop_pk, shop_id, owner_user_id):
+    def _fake_connect(shop_pk, shop_id, owner_user_id, **kwargs):
         called["args"] = (shop_pk, shop_id, owner_user_id)
         return True
 

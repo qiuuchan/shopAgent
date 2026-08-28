@@ -36,6 +36,7 @@ from app.core.data_scope import ensure_shop_in_scope
 from common.db.repository import Repository
 from common.models.config_models import BusinessHours
 from common.schemas.common import ApiResponse, error_response, success_response
+from common.utils.weekdays import normalize_weekdays, validate_weekdays
 
 # 支持解析的时刻字符串格式：优先 HH:MM:SS，其次 HH:MM（北京时间口径）。
 _TIME_FORMATS: tuple[str, ...] = ("%H:%M:%S", "%H:%M")
@@ -103,6 +104,7 @@ def serialize_business_hours(record: BusinessHours) -> Dict[str, Any]:
         "shop_pk": record.shop_pk,
         "start_time": _format_time(record.start_time),
         "end_time": _format_time(record.end_time),
+        "weekdays": record.weekdays or "",
         "enabled": bool(record.enabled),
     }
 
@@ -113,20 +115,24 @@ def configure_business_hours(
     start_time: Any = None,
     end_time: Any = None,
     *,
+    weekdays: Any = None,
     enabled: bool = True,
     operator_id: Optional[int] = None,
 ) -> ApiResponse:
-    """配置并持久化店铺营业时间的起止时刻（需求 11.1）。
+    """配置并持久化店铺营业时间的起止时刻与星期维度（需求 11.1）。
 
     按店铺主键 ``shop_pk`` 作为业务键 upsert：同一店铺仅保留一条营业时间配置，
     重复配置覆盖更新（幂等）。起止时刻按「HH:MM」/「HH:MM:SS」解析（北京时间
-    口径）；允许仅设置其一或均为空（均为空表示未配置，业务侧默认全天）。
+    口径）；允许仅设置其一或均为空（均为空表示未配置，业务侧默认全天）。星期维度
+    ``weekdays`` 为逗号分隔的星期序号（1=周一 … 7=周日），如 ``"1,2,3,4,5"`` 表示
+    周一至周五；空 / None 表示「每天」（与旧数据兼容，写入归一为空串）。
 
     Args:
         session: 数据库会话。
         shop_pk: 店铺主键（shop.id）。
         start_time: 营业开始时刻（字符串 HH:MM/HH:MM:SS，或为空表示不设置）。
         end_time: 营业结束时刻（字符串 HH:MM/HH:MM:SS，或为空表示不设置）。
+        weekdays: 营业星期维度表达式（"1,2,3,4,5"），空 / None 表示每天。
         enabled: 该配置是否启用，默认启用。
         operator_id: 操作人用户 ID，作为创建人审计字段（仅新建时记录）。
 
@@ -154,6 +160,14 @@ def configure_business_hours(
             CODE_PARAM_ERROR, "营业结束时刻格式无效，应为 HH:MM 或 HH:MM:SS"
         )
 
+    # 星期维度格式校验：非法格式（非整数段 / 越界序号 / 空段）抛 BusinessError，
+    # 由统一异常处理器兜底为 HTTP 200 + 失败响应体，不抛 4xx/5xx。
+    try:
+        validate_weekdays(weekdays)
+    except ValueError as exc:
+        return error_response(CODE_PARAM_ERROR, f"营业星期维度格式无效：{exc}")
+    weekdays_value = normalize_weekdays(weekdays)
+
     repo = Repository(BusinessHours, session)
     # 按 shop_pk upsert：存在则更新起止时刻与启用状态，不存在则新建。
     existing = repo.get_by(shop_pk=shop_pk)
@@ -162,6 +176,7 @@ def configure_business_hours(
             shop_pk=shop_pk,
             start_time=start_value,
             end_time=end_value,
+            weekdays=weekdays_value,
             enabled=bool(enabled),
             created_by=operator_id,
         )
@@ -170,6 +185,7 @@ def configure_business_hours(
             existing.id,
             start_time=start_value,
             end_time=end_value,
+            weekdays=weekdays_value,
             enabled=bool(enabled),
         )
 

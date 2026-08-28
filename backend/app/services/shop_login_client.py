@@ -98,12 +98,15 @@ def _invoke(path: str, payload: Dict[str, Any], *, action: str) -> ShopLoginResu
     return ShopLoginResult(ok=True, info=info)
 
 
-def login_by_password(username: str, password: str) -> ShopLoginResult:
+def login_by_password(
+    username: str, password: str, platform: str = "pdd"
+) -> ShopLoginResult:
     """经 websocket 账号密码登录拼多多并获取店铺信息（需求 4.1 / 4.2）。
 
     Args:
         username: 拼多多商家后台登录账号。
         password: 拼多多商家后台登录密码（明文，仅内网传输）。
+        platform: 店铺所属平台（'pdd' / 'tiktok'，默认 'pdd'，TIK-003 透传）。
 
     Returns:
         规整后的 ``ShopLoginResult``；成功时 info 含 shop_id / shop_name /
@@ -111,16 +114,17 @@ def login_by_password(username: str, password: str) -> ShopLoginResult:
     """
     return _invoke(
         _PASSWORD_LOGIN_PATH,
-        {"username": username, "password": password},
+        {"username": username, "password": password, "platform": platform},
         action="账号密码登录",
     )
 
 
-def import_by_cookie(cookies: str) -> ShopLoginResult:
+def import_by_cookie(cookies: str, platform: str = "pdd") -> ShopLoginResult:
     """经 websocket 校验 Cookie 文本并获取店铺信息（需求 4.3 / 4.4）。
 
     Args:
         cookies: 用户粘贴的 Cookie 文本。
+        platform: 店铺所属平台（'pdd' / 'tiktok'，默认 'pdd'，TIK-003 透传）。
 
     Returns:
         规整后的 ``ShopLoginResult``；成功时 info 含 shop_id / shop_name /
@@ -128,7 +132,7 @@ def import_by_cookie(cookies: str) -> ShopLoginResult:
     """
     return _invoke(
         _COOKIE_IMPORT_PATH,
-        {"cookies": cookies},
+        {"cookies": cookies, "platform": platform},
         action="Cookie 导入",
     )
 

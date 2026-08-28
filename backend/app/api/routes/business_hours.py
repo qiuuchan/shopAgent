@@ -81,6 +81,9 @@ class BusinessHoursRequest(BaseModel):
     end_time: Optional[str] = Field(
         None, description="营业结束时刻（HH:MM 或 HH:MM:SS，北京时间；空表示不设置，可跨午夜）"
     )
+    weekdays: Optional[str] = Field(
+        None, description="营业星期维度（逗号分隔 1~7，如 '1,2,3,4,5' 表示周一至周五；空表示每天）"
+    )
     enabled: bool = Field(True, description="是否启用该营业时间配置")
 
 
@@ -107,6 +110,7 @@ def configure_business_hours(
         shop_pk=shop_pk,
         start_time=payload.start_time,
         end_time=payload.end_time,
+        weekdays=payload.weekdays,
         enabled=payload.enabled,
         operator_id=current_user.id,
     )

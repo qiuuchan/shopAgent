@@ -581,7 +581,10 @@ def connect_shop(
         return denied
 
     ok = connection_notify.notify_connect(
-        shop_pk=shop.id, shop_id=shop.shop_id, owner_user_id=shop.owner_user_id
+        shop_pk=shop.id,
+        shop_id=shop.shop_id,
+        owner_user_id=shop.owner_user_id,
+        proxy_server=shop.proxy_server,
     )
     if not ok:
         return error_response(CODE_EXTERNAL_ERROR, "连接失败，请稍后重试")

@@ -52,9 +52,83 @@ from common.schemas.sanitize import sanitize_sensitive
 from common.utils.crypto import encrypt_text, try_decrypt_text
 from common.utils.time_utils import safe_isoformat
 
+# 店铺所属平台的合法枚举（与 sys_dict 的 platform 字典、Shop.platform 列一致）。
+# 默认 'pdd'，向后兼容存量店铺（TIK-002 已将存量店铺归 'pdd'，TIK-003 全链路透传）。
+VALID_PLATFORMS: tuple[str, ...] = ("pdd", "tiktok")
+DEFAULT_PLATFORM: str = "pdd"
+
 # 店铺启停用状态值（与 Shop.status 约定一致：1=启用，0=停用）。
 SHOP_STATUS_ENABLED: int = 1
 SHOP_STATUS_DISABLED: int = 0
+
+
+def validate_platform(platform: Optional[str]) -> str:
+    """校验并返回合法的店铺所属平台枚举。
+
+    空 / None 归一为默认平台 ``'pdd'``（向后兼容）；非合法枚举抛 ``ValueError``，
+    由路由层捕获后转 ``BusinessError``（归 ``CODE_PARAM_ERROR``，不抛 4xx/5xx）。
+
+    Args:
+        platform: 平台标识（'pdd' / 'tiktok'），或空 / None 表示沿用默认。
+
+    Returns:
+        合法平台字符串；空输入返回 ``DEFAULT_PLATFORM``。
+
+    Raises:
+        ValueError: 当 platform 为非空但不在合法枚举内时抛出。
+    """
+    if platform is None or not str(platform).strip():
+        return DEFAULT_PLATFORM
+    value = str(platform).strip()
+    if value not in VALID_PLATFORMS:
+        raise ValueError(f"非法的平台标识：{value!r}（仅允许 {VALID_PLATFORMS}）")
+    return value
+
+
+# 店铺出口代理允许的协议前缀（Phase 2 前置，店铺级代理字段校验）。
+# 仅支持浏览器可直接消费的代理协议：http(s) 正向代理与 socks5(5h)；
+# 地址须含 host:port（Playwright --proxy-server 参数语义）。
+_PROXY_ALLOWED_PREFIXES: tuple[str, ...] = (
+    "http://",
+    "https://",
+    "socks5://",
+    "socks5h://",
+)
+
+
+def validate_proxy_server(proxy_server: Optional[str]) -> Optional[str]:
+    """校验并返回合法的店铺出口代理服务器地址。
+
+    空 / None 归一为 None（不走代理，默认关闭）；非空时须以支持的协议前缀
+    （http(s):// / socks5(5h)://）开头且带 host:port，否则抛 ``ValueError``，
+    由路由层捕获后转 ``BusinessError``（归 ``CODE_PARAM_ERROR``，不抛 4xx/5xx）。
+
+    Args:
+        proxy_server: 代理服务器地址（如 ``http://127.0.0.1:7890``），或空 / None。
+
+    Returns:
+        合法代理地址字符串；空输入返回 None（不走代理）。
+
+    Raises:
+        ValueError: 当代理地址非空但协议前缀非法或缺少 host:port 时抛出。
+    """
+    if proxy_server is None or not str(proxy_server).strip():
+        return None
+    value = str(proxy_server).strip()
+    lowered = value.lower()
+    matched_prefix = next(
+        (p for p in _PROXY_ALLOWED_PREFIXES if lowered.startswith(p)), None
+    )
+    if matched_prefix is None:
+        raise ValueError(
+            f"代理地址协议不支持：{value!r}（仅允许 http(s):// 与 socks5(5h)://）"
+        )
+    # host:port 校验：协议前缀之后须非空且含端口分隔（host 或 host:port 均可由
+    # Playwright 解析，但为尽早暴露配置错误，要求至少形如 host:port）。
+    endpoint = value[len(matched_prefix):]
+    if not endpoint or ":" not in endpoint:
+        raise ValueError(f"代理地址须包含 host:port：{value!r}")
+    return value
 
 
 # ----------------------------------------------------------------------
@@ -82,6 +156,8 @@ def serialize_shop(shop: Shop) -> Dict[str, Any]:
         "owner_user_id": shop.owner_user_id,
         "remark": shop.remark,
         "status": shop.status,
+        "platform": shop.platform or DEFAULT_PLATFORM,
+        "proxy_server": shop.proxy_server,
         "created_at": safe_isoformat(shop.created_at),
         "updated_at": safe_isoformat(shop.updated_at),
     }
@@ -137,6 +213,8 @@ def upsert_shop(
     cookies: Optional[str] = None,
     username: Optional[str] = None,
     password: Optional[str] = None,
+    platform: str = DEFAULT_PLATFORM,
+    proxy_server: Optional[str] = None,
     operator_id: Optional[int] = None,
 ) -> ApiResponse:
     """新增或更新店铺（需求 3.1 / 3.2 / 3.6）。
@@ -157,6 +235,9 @@ def upsert_shop(
         cookies: 登录 Cookie 明文（将加密存储，不落库明文）。
         username: 拼多多登录账号。
         password: 账号密码明文（将加密存储，不落库明文）。
+        platform: 店铺所属平台（'pdd' / 'tiktok'，默认 'pdd'，TIK-003 透传）。
+        proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 TikTok 通道消费；
+            None=不改，空串=清空不走代理，非空须经 ``validate_proxy_server`` 校验）。
         operator_id: 操作人用户 ID（创建人审计字段）。
 
     Returns:
@@ -167,6 +248,20 @@ def upsert_shop(
         return error_response(CODE_PARAM_ERROR, "店铺标识不能为空")
     if owner_user_id is None:
         return error_response(CODE_PARAM_ERROR, "店铺归属用户不能为空")
+
+    # 平台标识校验：非法枚举归 CODE_PARAM_ERROR，不抛 HTTP 4xx/5xx。
+    try:
+        platform = validate_platform(platform)
+    except ValueError as exc:
+        return error_response(CODE_PARAM_ERROR, str(exc))
+
+    # 出口代理校验：显式传入的非空值须合法（空串 / None 归一为不走代理）。
+    # 归一前记录「是否显式传入」，用于区分 None（不改）与空串（清空）。
+    proxy_provided = proxy_server is not None
+    try:
+        proxy_server = validate_proxy_server(proxy_server)
+    except ValueError as exc:
+        return error_response(CODE_PARAM_ERROR, str(exc))
 
     shop_id = str(shop_id).strip()
     shop_repo = Repository(Shop, session)
@@ -183,6 +278,11 @@ def upsert_shop(
         shop_values["channel_id"] = channel_id
     if remark is not None:
         shop_values["remark"] = remark
+    # 平台标识：TIK-003 透传，缺省 'pdd' 与存量行为一致。
+    shop_values["platform"] = platform
+    # 出口代理：仅显式传入（含空串清空为 None）才更新，None 表示不改动（upsert 语义）。
+    if proxy_provided:
+        shop_values["proxy_server"] = proxy_server
 
     # 判定是否为新建（用于初始化新建记录的默认字段，如启用状态与创建人）。
     existing = shop_repo.get_by(**biz_keys)
@@ -212,6 +312,9 @@ def upsert_shop(
             shop_pk=shop.id,
             shop_id=shop.shop_id,
             owner_user_id=owner_user_id,
+            platform=platform,
+            # 以落库后的实际代理为准（未显式修改时沿用存量值，保证连接与配置一致）。
+            proxy_server=shop.proxy_server,
         )
 
     return success_response(data=serialize_shop(shop), message="保存成功")
@@ -270,6 +373,7 @@ def login_shop_by_password(
     password: str,
     owner_user_id: int,
     remark: Optional[str] = None,
+    platform: str = DEFAULT_PLATFORM,
     operator_id: Optional[int] = None,
 ) -> ApiResponse:
     """账号密码登录并自动获取店铺信息后新增 / 更新店铺（需求 4.1 / 4.2）。
@@ -285,6 +389,7 @@ def login_shop_by_password(
         password: 账号密码明文（将加密存储，不落库明文）。
         owner_user_id: 归属用户 ID（数据范围隔离）。
         remark: 备注。
+        platform: 店铺所属平台（'pdd' / 'tiktok'，默认 'pdd'，TIK-003 透传）。
         operator_id: 操作人用户 ID（创建人审计字段）。
 
     Returns:
@@ -295,8 +400,14 @@ def login_shop_by_password(
     if not password:
         return error_response(CODE_PARAM_ERROR, "登录密码不能为空")
 
+    # 平台标识校验：非法枚举归 CODE_PARAM_ERROR，不抛 HTTP 4xx/5xx。
+    try:
+        platform = validate_platform(platform)
+    except ValueError as exc:
+        return error_response(CODE_PARAM_ERROR, str(exc))
+
     # 经 websocket 登录并获取店铺信息（耗时操作，失败已规整为中文原因）。
-    result = login_with_password(str(username).strip(), password)
+    result = login_with_password(str(username).strip(), password, platform=platform)
     if not result.ok or not result.info:
         return error_response(CODE_PARAM_ERROR, result.message or "账号密码登录失败")
 
@@ -307,6 +418,7 @@ def login_shop_by_password(
         username=str(username).strip(),
         password=password,
         remark=remark,
+        platform=platform,
         operator_id=operator_id,
     )
 
@@ -317,6 +429,7 @@ def import_shop_by_cookie(
     cookies: str,
     owner_user_id: int,
     remark: Optional[str] = None,
+    platform: str = DEFAULT_PLATFORM,
     operator_id: Optional[int] = None,
 ) -> ApiResponse:
     """校验 Cookie 文本并自动获取店铺信息后新增 / 更新店铺（需求 4.3 / 4.4）。
@@ -329,6 +442,7 @@ def import_shop_by_cookie(
         cookies: 用户粘贴的 Cookie 文本。
         owner_user_id: 归属用户 ID（数据范围隔离）。
         remark: 备注。
+        platform: 店铺所属平台（'pdd' / 'tiktok'，默认 'pdd'，TIK-003 透传）。
         operator_id: 操作人用户 ID（创建人审计字段）。
 
     Returns:
@@ -337,7 +451,13 @@ def import_shop_by_cookie(
     if not cookies or not str(cookies).strip():
         return error_response(CODE_PARAM_ERROR, "Cookie 文本不能为空")
 
-    result = login_import_by_cookie(str(cookies).strip())
+    # 平台标识校验：非法枚举归 CODE_PARAM_ERROR，不抛 HTTP 4xx/5xx。
+    try:
+        platform = validate_platform(platform)
+    except ValueError as exc:
+        return error_response(CODE_PARAM_ERROR, str(exc))
+
+    result = login_import_by_cookie(str(cookies).strip(), platform=platform)
     if not result.ok or not result.info:
         return error_response(CODE_PARAM_ERROR, result.message or "Cookie 导入失败")
 
@@ -351,6 +471,7 @@ def import_shop_by_cookie(
         username=cookie_username,
         password=None,
         remark=remark,
+        platform=platform,
         operator_id=operator_id,
     )
 
@@ -363,6 +484,7 @@ def _persist_logged_in_shop(
     username: Optional[str],
     password: Optional[str],
     remark: Optional[str],
+    platform: str = DEFAULT_PLATFORM,
     operator_id: Optional[int],
 ) -> ApiResponse:
     """将登录 / 导入获取到的店铺信息与凭据落库（复用 upsert，需求 4.1-4.4 / 3.6）。
@@ -377,6 +499,7 @@ def _persist_logged_in_shop(
         username: 登录账号（账号密码登录时为输入账号；Cookie 导入时取登录态用户名）。
         password: 账号密码明文（仅账号密码登录时有值，将加密存储）。
         remark: 备注。
+        platform: 店铺所属平台（透传，默认 'pdd'）。
         operator_id: 操作人用户 ID。
 
     Returns:
@@ -405,6 +528,7 @@ def _persist_logged_in_shop(
         cookies=cookies_text,
         username=username,
         password=password,
+        platform=platform,
         operator_id=operator_id,
     )
 
@@ -421,6 +545,7 @@ def update_shop(
     shop_name: Optional[str] = None,
     shop_logo: Optional[str] = None,
     channel_id: Optional[int] = None,
+    proxy_server: Optional[str] = None,
     enabled: Optional[bool] = None,
     username: Optional[str] = None,
     cookies: Optional[str] = None,
@@ -444,6 +569,8 @@ def update_shop(
         shop_name: 新店铺名称。
         shop_logo: 新 Logo URL。
         channel_id: 新渠道 ID。
+        proxy_server: 新出口代理服务器地址（None=不改；空串=清空不走代理；非空
+            须经 ``validate_proxy_server`` 校验）。
         enabled: 启用状态；True=启用，False=停用（停用将断连）。
         username: 新登录账号（None=不改）。
         cookies: 新 Cookie 明文（None=不改，将加密存储）。
@@ -472,6 +599,13 @@ def update_shop(
     if channel_id is not None:
         values["channel_id"] = channel_id
 
+    # 出口代理：显式传入（含空串清空为 None）才更新，None 表示不改动。
+    if proxy_server is not None:
+        try:
+            values["proxy_server"] = validate_proxy_server(proxy_server)
+        except ValueError as exc:
+            return error_response(CODE_PARAM_ERROR, str(exc))
+
     if values:
         shop_repo.update(shop_pk, **values)
 
@@ -489,6 +623,9 @@ def update_shop(
             password=password,
         )
 
+    # 更新后的实际出口代理（未显式修改时沿用存量值，保证连接与配置一致）。
+    effective_proxy = values["proxy_server"] if "proxy_server" in values else shop.proxy_server
+
     # 启用状态变更：停用走停用流程（断连），启用直接置回启用。
     if enabled is not None:
         if enabled:
@@ -499,6 +636,8 @@ def update_shop(
                 shop_pk=shop.id,
                 shop_id=shop.shop_id,
                 owner_user_id=shop.owner_user_id,
+                platform=shop.platform or DEFAULT_PLATFORM,
+                proxy_server=effective_proxy,
             )
         else:
             return disable_shop(session, shop_pk, current_user=current_user)
@@ -509,6 +648,8 @@ def update_shop(
             shop_pk=shop.id,
             shop_id=shop.shop_id,
             owner_user_id=shop.owner_user_id,
+            platform=shop.platform or DEFAULT_PLATFORM,
+            proxy_server=effective_proxy,
         )
 
     # 返回最新详情（含反显凭据），便于前端保存后即时刷新展示。
@@ -560,6 +701,7 @@ def disable_shop(
         shop_pk=shop.id,
         shop_id=shop.shop_id,
         owner_user_id=shop.owner_user_id,
+        platform=shop.platform or DEFAULT_PLATFORM,
     )
 
     return success_response(data=serialize_shop(shop), message="已停用并断开连接")
@@ -780,6 +922,9 @@ def _build_paged_response(page_result: Any, serialized: List[Dict[str, Any]]) ->
 __all__ = [
     "SHOP_STATUS_ENABLED",
     "SHOP_STATUS_DISABLED",
+    "VALID_PLATFORMS",
+    "DEFAULT_PLATFORM",
+    "validate_platform",
     "serialize_shop",
     "upsert_shop",
     "login_shop_by_password",
