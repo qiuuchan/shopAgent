@@ -43,3 +43,24 @@ def tiktok_enabled(monkeypatch: pytest.MonkeyPatch):
         "channel_pdd.connection_manager.get_settings", lambda: settings
     )
     return settings
+
+
+@pytest.fixture()
+def tiktok_disabled(monkeypatch: pytest.MonkeyPatch):
+    """注入「灰度开关关闭」的配置对象（与 tiktok_enabled 对称）。
+
+    说明：不能依赖「默认配置为 false」——根目录 .env 若配置
+    TIKTOK_SHOP_ENABLED=true（如验收窗口开启后），真实 get_settings() 会读到
+    true，导致禁用态断言失败。禁用态测试必须经本 fixture 显式注入，保持封闭。
+    """
+    settings = types.SimpleNamespace(
+        tiktok_shop_enabled=False,
+        tiktok_max_browser_instances=4,
+        tiktok_send_timeout_seconds=15.0,
+        tiktok_poll_interval_seconds=5.0,
+        tiktok_debounce_seconds=45.0,
+    )
+    monkeypatch.setattr(
+        "channel_pdd.connection_manager.get_settings", lambda: settings
+    )
+    return settings

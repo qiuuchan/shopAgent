@@ -75,8 +75,12 @@ def test_create_channel_tiktok_is_real(tiktok_enabled):
     assert channel.shop_pk == 2
 
 
-def test_create_channel_tiktok_rejected_when_disabled():
-    """TIKTOK_SHOP_ENABLED=false（默认）时，TikTok 连接请求被拒绝（TIK-017 灰度总开关）。"""
+def test_create_channel_tiktok_rejected_when_disabled(tiktok_disabled):
+    """灰度开关关闭时，TikTok 连接请求被拒绝（TIK-017 灰度总开关）。
+
+    经 tiktok_disabled fixture 显式注入关闭态（不读根目录 .env），保证无论
+    本地/验收环境是否开启 TIKTOK_SHOP_ENABLED，本用例行为封闭稳定。
+    """
 
     async def _run():
         return create_channel("shop_tk", 2, 9, platform=PLATFORM_TIKTOK)

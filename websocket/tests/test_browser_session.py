@@ -110,8 +110,21 @@ def patched_launcher(monkeypatch):
         playwright._context = context
         return context
 
+    # 假 playwright 默认工厂：BrowserSession 未显式注入工厂时经模块级默认值命中此处。
+    # 返回「无 __aenter__ 的假 playwright 实例」：start() 将其直接作为实例引用，
+    # close() 走 stop() 协程回收路径。必须替换——真实 async_playwright 的 __aenter__
+    # 会拉起 node driver 子进程，且 start/close 分处两个 asyncio.run（不同 loop），
+    # 子进程 transport 跨 loop 无法回收，GC 时产生 unraisable 告警并偶发干扰
+    # Hypothesis 属性测试（Flaky）。
+    def _fake_default_playwright_factory():
+        playwright, _ = _make_fakes()
+        return lambda: playwright
+
     monkeypatch.setattr(bs_mod, "clean_singleton_lock_files", _fake_clean)
     monkeypatch.setattr(bs_mod, "launch_persistent_context_with_retry", _fake_launch)
+    monkeypatch.setattr(
+        bs_mod, "_default_playwright_factory", _fake_default_playwright_factory
+    )
     return calls
 
 

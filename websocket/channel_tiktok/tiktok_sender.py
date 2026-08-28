@@ -128,8 +128,16 @@ class TikTokSender:
         try:
             # 线程桥接：把 DOM 协程调度回主循环执行并阻塞等待结果，超时视为失败。
             future = asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception as exc:  # noqa: BLE001 - 桥接失败（如主循环已关闭）
+            # 协程尚未入队执行，主动关闭，避免 GC 时产生「never awaited」告警。
+            coro.close()
+            logger.error("TikTok 发送文本消息异常: shop_id=%s, %s", self.shop_id, exc)
+            return None
+        try:
             result = future.result(timeout=self.send_timeout)
-        except Exception as exc:  # noqa: BLE001 - 统一兜底为 None（对齐 PDD 失败返回）
+        except Exception as exc:  # noqa: BLE001 - 超时 / 执行异常统一兜底
+            # 尽力取消仍在主循环排队的任务（已执行完的取消无效，无害）。
+            future.cancel()
             logger.error("TikTok 发送文本消息异常: shop_id=%s, %s", self.shop_id, exc)
             return None
         return result

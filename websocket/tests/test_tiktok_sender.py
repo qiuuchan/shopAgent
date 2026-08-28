@@ -245,8 +245,14 @@ def test_thread_bridge_timeout_returns_none():
         def result(self, timeout=None):
             raise asyncio.TimeoutError("timeout")
 
+        def cancel(self):
+            return False
+
     class TimeoutLoop:
         def run_coroutine_threadsafe(self, coro, loop=None):
+            # 对齐真实 run_coroutine_threadsafe 的所有权语义：协程一经桥接即由
+            # 循环接管；本 mock 不执行它，须显式关闭避免 GC「never awaited」告警。
+            coro.close()
             return TimeoutFuture()
 
     page = FakePage(bubble_appears=True)
