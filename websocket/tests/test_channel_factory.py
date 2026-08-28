@@ -175,6 +175,52 @@ def test_create_channel_tiktok_default_proxy_none(tiktok_enabled, monkeypatch):
     assert captured["proxy_server"] is None
 
 
+def test_create_channel_tiktok_passes_browser_data_dir(tiktok_enabled, monkeypatch):
+    """工厂 tiktok 分支把登录态目录 browser_data_dir 注入 BrowserSession（免二次登录）。"""
+    captured: dict = {}
+
+    class _SpyBrowserSession:
+        """假浏览器会话：仅捕获构造参数，不真实启动浏览器。"""
+
+        def __init__(self, shop_pk: int, **kwargs) -> None:
+            captured["shop_pk"] = shop_pk
+            captured["user_data_dir"] = kwargs.get("user_data_dir")
+
+    monkeypatch.setattr(connection_manager, "BrowserSession", _SpyBrowserSession)
+
+    async def _run():
+        return create_channel(
+            "shop_tk",
+            2,
+            9,
+            platform=PLATFORM_TIKTOK,
+            browser_data_dir="D:/browser_data/tiktok_2",
+        )
+
+    channel = asyncio.run(_run())
+    assert isinstance(channel, TikTokChannel)
+    assert captured["shop_pk"] == 2
+    assert captured["user_data_dir"] == "D:/browser_data/tiktok_2"
+
+
+def test_create_channel_tiktok_default_browser_data_dir_none(tiktok_enabled, monkeypatch):
+    """未传 browser_data_dir 时，BrowserSession 以 None 构造（按 shop_pk 推导默认目录）。"""
+    captured: dict = {}
+
+    class _SpyBrowserSession:
+        def __init__(self, shop_pk: int, **kwargs) -> None:
+            captured["user_data_dir"] = kwargs.get("user_data_dir")
+
+    monkeypatch.setattr(connection_manager, "BrowserSession", _SpyBrowserSession)
+
+    async def _run():
+        return create_channel("shop_tk", 2, 9, platform=PLATFORM_TIKTOK)
+
+    channel = asyncio.run(_run())
+    assert isinstance(channel, TikTokChannel)
+    assert captured["user_data_dir"] is None
+
+
 def test_pdd_channel_start_stop_noop_safe(monkeypatch):
     """PDD 分支在注入消费器场景下，create→（不真连）→事件通知器可用。"""
     # 仅验证 PDD 分支构造产物满足 ChannelAdapter 协议关键属性，避免真实建连。

@@ -158,6 +158,7 @@ def serialize_shop(shop: Shop) -> Dict[str, Any]:
         "status": shop.status,
         "platform": shop.platform or DEFAULT_PLATFORM,
         "proxy_server": shop.proxy_server,
+        "browser_data_dir": shop.browser_data_dir,
         "created_at": safe_isoformat(shop.created_at),
         "updated_at": safe_isoformat(shop.updated_at),
     }
@@ -215,6 +216,7 @@ def upsert_shop(
     password: Optional[str] = None,
     platform: str = DEFAULT_PLATFORM,
     proxy_server: Optional[str] = None,
+    browser_data_dir: Optional[str] = None,
     operator_id: Optional[int] = None,
 ) -> ApiResponse:
     """新增或更新店铺（需求 3.1 / 3.2 / 3.6）。
@@ -238,6 +240,8 @@ def upsert_shop(
         platform: 店铺所属平台（'pdd' / 'tiktok'，默认 'pdd'，TIK-003 透传）。
         proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 TikTok 通道消费；
             None=不改，空串=清空不走代理，非空须经 ``validate_proxy_server`` 校验）。
+        browser_data_dir: TikTok 登录态浏览器用户数据目录（建店登录后落库，
+            connect 时复用免二次登录；None=不改，空串=清空按默认目录推导）。
         operator_id: 操作人用户 ID（创建人审计字段）。
 
     Returns:
@@ -263,6 +267,11 @@ def upsert_shop(
     except ValueError as exc:
         return error_response(CODE_PARAM_ERROR, str(exc))
 
+    # 登录态目录归一：空串视为清空（None=不改，空串=按默认目录推导）。
+    browser_data_dir_provided = browser_data_dir is not None
+    if browser_data_dir_provided and not str(browser_data_dir).strip():
+        browser_data_dir = None
+
     shop_id = str(shop_id).strip()
     shop_repo = Repository(Shop, session)
 
@@ -283,6 +292,9 @@ def upsert_shop(
     # 出口代理：仅显式传入（含空串清空为 None）才更新，None 表示不改动（upsert 语义）。
     if proxy_provided:
         shop_values["proxy_server"] = proxy_server
+    # 登录态目录：仅显式传入（含空串清空为 None）才更新，None 表示不改动。
+    if browser_data_dir_provided:
+        shop_values["browser_data_dir"] = browser_data_dir
 
     # 判定是否为新建（用于初始化新建记录的默认字段，如启用状态与创建人）。
     existing = shop_repo.get_by(**biz_keys)
@@ -529,6 +541,7 @@ def _persist_logged_in_shop(
         username=username,
         password=password,
         platform=platform,
+        browser_data_dir=info.get("browser_data_dir"),
         operator_id=operator_id,
     )
 

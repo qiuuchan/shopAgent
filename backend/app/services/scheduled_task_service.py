@@ -5,9 +5,9 @@ backend.app.services.scheduled_task_service —— 定时任务与执行日志�
 本文件用途：实现 backend 服务的「定时任务」管理端业务逻辑（任务 17.6 配套，
 满足需求 21.2），供 scheduled_tasks 路由复用：
 
-- ``ensure_default_tasks(...)``：幂等补齐三项内置定时任务（Cookie 刷新 /
-  商品同步 / 文件日志清理），缺失时按业务键 ``task_key`` upsert 创建（规范 14：
-  缺失初始数据自动补齐，不影响历史数据）。
+- ``ensure_default_tasks(...)``：幂等补齐四项内置定时任务（Cookie 刷新 /
+  商品同步 / 文件日志清理 / TikTok 营业时间窗），缺失时按业务键 ``task_key``
+  upsert 创建（规范 14：缺失初始数据自动补齐，不影响历史数据）。
 - ``list_tasks(...)``：定时任务列表后端分页（需求 21.2 配套）。
 - ``update_task(...)``：更新调度方式 / 调度配置 / 启停用（需求 21.2）。
 - ``set_task_enabled(...)``：启用 / 停用定时任务。
@@ -36,10 +36,13 @@ from common.schemas.common import ApiResponse, error_response, success_response
 
 # 内置定时任务键与默认配置（与 scheduler 服务 tasks.constants 约定一致，需求 21.2）。
 # 每项：(task_key, task_name, schedule_type, schedule_config, enabled)
+# tiktok_window：TikTok 营业时间窗控制（TIK-015），管理端页面仅支持编辑/启停，
+# 无法新建任务，故随内置任务种子幂等补齐；无 TikTok 店铺时执行体直接跳过，无害。
 DEFAULT_TASKS: tuple[tuple[str, str, str, str, bool], ...] = (
     ("cookie_refresh", "Cookie 刷新", "interval", "600", True),
     ("product_sync", "商品同步", "cron", "0 3 * * *", False),
     ("log_file_cleanup", "文件日志清理", "cron", "0 4 * * *", True),
+    ("tiktok_window", "TikTok 营业时间窗", "interval", "60", True),
 )
 
 # 受支持的调度方式（与 sys_dict 的 schedule_type 一致）。

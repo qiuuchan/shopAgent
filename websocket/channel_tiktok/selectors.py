@@ -76,8 +76,28 @@ SELECTOR_UNREAD_BADGE: str = ".p-badge"
 
 
 # ----------------------------------------------------------------------
-# 待确认项（需真实买家会话出现后由 TIK-012 补测，见 selectors.md 待确认项）
+# 登录页表单选择器（s6_login_form_map 实测，2026-08-28）
 # ----------------------------------------------------------------------
+# 泰国站登录页（/account/login）实测结构（spike/tiktok/login_form_report.json）：
+# - 默认激活「手机号」登录 tab（SPAN.panel-item.selected text=手机号），手机号与
+#   密码输入框可见，邮箱输入框隐藏；无需切换 tab；
+# - 区号选择为隐藏下拉（Area_Select 输入框默认不可见），未测到默认区号，登录时
+#   直接填手机号，若平台报「号码/区号」错误由上层提示人工处理；
+# - 登录后可能弹出验证码输入框（短信/图形，见 SELECTOR_LOGIN_CODE_INPUT），
+#   此时需人工输入（登录流程预留等待时间）。
+# 手机号登录输入框（type=tel，name=mobile）。
+SELECTOR_LOGIN_MOBILE_INPUT: str = "#TikTok_Ads_SSO_Login_Mobile_Input"
+# 密码输入框（type=password，name=password）。
+SELECTOR_LOGIN_PASSWORD_INPUT: str = "#TikTok_Ads_SSO_Login_Pwd_Input"
+# 登录提交按钮（name=loginBtn，text=登录）。
+SELECTOR_LOGIN_SUBMIT_BUTTON: str = "#TikTok_Ads_SSO_Login_Btn"
+# 验证码输入框（登录后若触发短信/图形验证码则可见，需人工输入）。
+SELECTOR_LOGIN_CODE_INPUT: str = "#TikTok_Ads_SSO_Login_Code_Input"
+# 登录表单错误提示的宽松选择器（页面出现可见错误信息时提前终止等待）。
+SELECTOR_LOGIN_ERROR_HINT: str = ".error-msg, .error_message, .arco-message-error"
+
+
+
 # 以下选择器尚未测绘（空店无活跃会话时不渲染），仅声明占位语义，供 TIK-012 引用时
 # 明确「待补测」边界，避免提前写成臆测选择器：
 #   SELECTOR_CONVERSATION_ITEM：会话列表条目
@@ -98,4 +118,9 @@ __all__ = [
     "SELECTOR_CHAT_NAV",
     "SELECTOR_IM_BUTTON",
     "SELECTOR_UNREAD_BADGE",
+    "SELECTOR_LOGIN_MOBILE_INPUT",
+    "SELECTOR_LOGIN_PASSWORD_INPUT",
+    "SELECTOR_LOGIN_SUBMIT_BUTTON",
+    "SELECTOR_LOGIN_CODE_INPUT",
+    "SELECTOR_LOGIN_ERROR_HINT",
 ]

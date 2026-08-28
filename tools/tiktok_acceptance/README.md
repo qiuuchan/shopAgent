@@ -37,8 +37,8 @@
 
 1. 测试店账号已人工登录一次（user-data-dir 登录态有效，二次免登通过）；
 2. 生产 `.env`：`TIKTOK_SHOP_ENABLED=true`，其余 `TIKTOK_*` 按需调整；
-3. 管理端已建 `scheduled_task` 记录启用 `tiktok_window`（scheduler 无自动种子，须手工建）；
-4. 店铺已启用企微通知渠道（`notify` 配置），企微群机器人可收到消息；
+3. 管理端 `/admin/scheduled-tasks` 存在启用中的 `tiktok_window` 任务（backend 启动后按内置种子幂等补齐，页面仅支持编辑/启停；确认 schedule_config=60、enabled=true）；
+4. 店铺已启用企微通知渠道（`notify` 配置），企微群机器人可收到消息；**未配企微时可跳过**（2026-08-28 决定：暂无企微群，验收以 `pdd_notify_record` 落库为准，企微投递联调放 Phase 2）；
 5. 营业时间为周末实际值守窗口（BusinessHoursPanel 已配 weekdays，TIK-006/007 交付）。
 
 ## 4. 验收标准逐条演练

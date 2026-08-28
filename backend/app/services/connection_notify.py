@@ -21,8 +21,13 @@ from common.services import service_client
 
 logger = logging.getLogger(__name__)
 
-# 断开连接的请求超时（秒）：尽力通知，避免长时间阻塞停用流程。
+# 连接状态查询 / 断开的请求超时（秒）：尽力通知，避免长时间阻塞停用流程。
 _NOTIFY_TIMEOUT_SECONDS: float = 5.0
+
+# 启动连接请求超时（秒）：TikTok 通道建浏览器会话（清锁 → 启动 Chromium → 打开
+# 聊天页）实测需 5~10 秒，超时过短会误报「启动失败」并导致调用方重试、重复建连
+# （2026-08-28 实测暴露）；PDD 长连接启动也远小于该值，统一放宽无副作用。
+_CONNECT_TIMEOUT_SECONDS: float = 30.0
 
 # websocket 服务断开连接接口的相对路径（与 websocket 服务路由约定一致）。
 _DISCONNECT_PATH: str = "/api/v1/connections/disconnect"
@@ -148,7 +153,7 @@ def notify_connect(
             "platform": platform,
             "proxy_server": proxy_server,
         },
-        timeout=_NOTIFY_TIMEOUT_SECONDS,
+        timeout=_CONNECT_TIMEOUT_SECONDS,
     )
     if response.success:
         logger.info("已通知 websocket 服务启动店铺连接：shop_id=%s", shop_id)

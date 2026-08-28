@@ -24,6 +24,9 @@ from pydantic import BaseModel, Field
 from channel_base import PLATFORM_PDD
 from channel_pdd import connection_manager, connection_registry
 from channel_pdd.transfer_service import TransferService
+from common.db.repository import Repository
+from common.db.session import session_scope
+from common.models.shop_models import Shop
 from common.schemas.common import ApiResponse, error_response, success_response
 
 logger = logging.getLogger("websocket.routes.connections")
@@ -83,6 +86,30 @@ class StatusBatchRequest(BaseModel):
     )
 
 
+def _load_browser_data_dir(shop_pk: int) -> Optional[str]:
+    """按店铺主键读取 TikTok 登录态浏览器目录（Shop.browser_data_dir，幂等降级）。
+
+    建店登录后该列被落库（登录态实际目录），连接时复用即可免二次登录；读取失败
+    （如列缺失 / 记录不存在）返回 None，由 connection_manager 按 shop_pk 推导
+    默认目录，行为与存量店铺一致。
+
+    Args:
+        shop_pk: 店铺主键 shop.id。
+
+    Returns:
+        登录态目录字符串；无 / 读取失败返回 None。
+    """
+    try:
+        with session_scope() as session:
+            shop = Repository(Shop, session).get(shop_pk)
+            if shop is None:
+                return None
+            return str(getattr(shop, "browser_data_dir", None) or "").strip() or None
+    except Exception as exc:  # noqa: BLE001 - 读取失败降级为 None
+        logger.warning("读取店铺登录态目录失败（按默认目录处理）: shop_pk=%s, %s", shop_pk, exc)
+        return None
+
+
 @router.post(
     "/connections/connect",
     response_model=ApiResponse,
@@ -93,7 +120,8 @@ async def connect_connection(payload: ConnectRequest) -> ApiResponse:
 
     经 ``connection_manager.start_channel`` 创建 PDDChannel 并绑定 MessageConsumer，
     完成「收消息 → 解析入队 → 决策链 → 知识库/AI → 发送回复 → 记日志/通知」装配，
-    随后登记到连接注册表供断连 / 状态查询定位。
+    随后登记到连接注册表供断连 / 状态查询定位。TikTok 店铺连接时自动复用建店登录
+    时落库的登录态目录（免二次登录）。
 
     Args:
         payload: 含 shop_pk / shop_id / owner_user_id 的启动请求体。
@@ -108,6 +136,7 @@ async def connect_connection(payload: ConnectRequest) -> ApiResponse:
             payload.owner_user_id,
             platform=payload.platform,
             proxy_server=payload.proxy_server,
+            browser_data_dir=_load_browser_data_dir(payload.shop_pk),
         )
     except Exception as exc:  # noqa: BLE001 - 启动异常不抛出，规整为失败响应
         logger.error("启动店铺连接异常: shop_id=%s, %s", payload.shop_id, exc)

@@ -189,10 +189,12 @@ def test_connections_route_platform_passthrough(monkeypatch: pytest.MonkeyPatch)
         channel_name: str = "pinduoduo",
         enable_notify: bool = True,
         proxy_server: Optional[str] = None,
+        browser_data_dir: Optional[str] = None,
     ) -> Any:
         captured["platform"] = platform
         captured["shop_id"] = shop_id
         captured["proxy_server"] = proxy_server
+        captured["browser_data_dir"] = browser_data_dir
 
         # 注意：类体不可见外层函数局部变量，故用 SimpleNamespace 注入属性。
         return types.SimpleNamespace(shop_id=shop_id, user_id=user_id)
@@ -203,6 +205,11 @@ def test_connections_route_platform_passthrough(monkeypatch: pytest.MonkeyPatch)
 
     # 隐式导入路由模块（其 connect_connection 调用 connection_manager.start_channel）。
     from routes import connections as connections_route
+
+    # 登录态目录读取为数据库访问，测试环境注入桩（返回固定值并断言透传）。
+    monkeypatch.setattr(
+        connections_route, "_load_browser_data_dir", lambda shop_pk: "D:/browser_data/tiktok_2"
+    )
 
     # 显式指定 platform='tiktok'（含店铺出口代理，Phase 2 前置透传）。
     async def _run_tiktok() -> None:
@@ -221,6 +228,8 @@ def test_connections_route_platform_passthrough(monkeypatch: pytest.MonkeyPatch)
     assert captured["platform"] == PLATFORM_TIKTOK
     assert captured["shop_id"] == "shop_tk"
     assert captured["proxy_server"] == "http://127.0.0.1:7890"
+    # 登录态目录从库读取后透传给 start_channel（免二次登录）。
+    assert captured["browser_data_dir"] == "D:/browser_data/tiktok_2"
 
     # 缺省 platform（不传）应为 'pdd'。
     captured.clear()

@@ -44,8 +44,8 @@ def test_list_tasks_seeds_defaults(client, test_users):
     resp = client.get(TASKS_URL, headers=_auth(admin_token)).json()
     assert resp["success"] is True
     keys = {task["task_key"] for task in resp["data"]["list"]}
-    # 三项内置任务均应补齐
-    assert {"cookie_refresh", "product_sync", "log_file_cleanup"}.issubset(keys)
+    # 四项内置任务均应补齐（含 TikTok 营业时间窗，TIK-015）
+    assert {"cookie_refresh", "product_sync", "log_file_cleanup", "tiktok_window"}.issubset(keys)
 
 
 def test_update_task_persists(client, test_users):

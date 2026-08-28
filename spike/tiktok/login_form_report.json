@@ -1,0 +1,262 @@
+{
+  "url": "https://seller.tiktokshopglobalselling.com/account/login",
+  "inputs": [
+    {
+      "tagName": "INPUT",
+      "type": "email",
+      "name": "email",
+      "id": "TikTok_Ads_SSO_Login_Email_Input",
+      "placeholder": "请输入邮箱",
+      "class": "tiktokads-common-login-form-email"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "id": "TikTok_Ads_SSO_Login_Area_Select_Input",
+      "placeholder": "搜索国家/地区或区号",
+      "class": "tiktokads-area-code-input"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "tel",
+      "name": "mobile",
+      "id": "TikTok_Ads_SSO_Login_Mobile_Input",
+      "placeholder": "请输入你的手机号",
+      "class": "tiktokads-common-account-form-mobile"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "password",
+      "name": "password",
+      "id": "TikTok_Ads_SSO_Login_Pwd_Input",
+      "placeholder": "请输入您的密码",
+      "class": "tiktokads-common-login-form-password"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "email",
+      "name": "email",
+      "id": "TikTok_Ads_SSO_Code_Email_Input",
+      "placeholder": "请输入邮箱",
+      "class": "tiktokads-common-login-form-email"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "id": "TikTok_Ads_SSO_Code_Area_Select_Input",
+      "placeholder": "搜索国家/地区或区号",
+      "class": "tiktokads-area-code-input"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "name": "mobile",
+      "id": "TikTok_Ads_SSO_Code_Mobile_Input",
+      "placeholder": "请输入你的手机号",
+      "class": "tiktokads-common-account-form-mobile"
+    },
+    {
+      "tagName": "INPUT",
+      "name": "code",
+      "id": "TikTok_Ads_SSO_Code_Code_Input",
+      "placeholder": "验证码",
+      "class": "tiktokads-common-login-code-form-code"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "email",
+      "name": "email",
+      "id": "TikTok_Ads_SSO_FPwd_Resend_Email_Input",
+      "placeholder": "请输入邮箱",
+      "class": "tiktokads-common-fpwd-form-email"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "id": "TikTok_Ads_SSO_FPwdResend_Area_Select_Input",
+      "placeholder": "搜索国家/地区或区号",
+      "class": "tiktokads-area-code-input"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "name": "mobile",
+      "id": "TikTok_Ads_SSO_FPwdResend_Mobile_Input",
+      "placeholder": "请输入你的手机号",
+      "class": "tiktokads-common-account-form-mobile"
+    },
+    {
+      "tagName": "INPUT",
+      "name": "code",
+      "id": "TikTok_Ads_SSO_FPwd_Code_Input",
+      "placeholder": "请输入验证码",
+      "class": "tiktokads-common-fpwd-form-code"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "password",
+      "name": "pwd",
+      "id": "TikTok_Ads_SSO_FPwd_Password_Input",
+      "placeholder": "请输入您的密码",
+      "class": "tiktokads-common-fpwd-form-pwd"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "password",
+      "name": "repwd",
+      "id": "TikTok_Ads_SSO_FPwd_Pre_Password_Input",
+      "placeholder": "请输入您的密码",
+      "class": "tiktokads-common-fpwd-form-repwd"
+    },
+    {
+      "tagName": "INPUT",
+      "name": "code",
+      "id": "TikTok_Ads_SSO_Login_Code_Input",
+      "placeholder": "请输入验证码",
+      "class": "tiktokads-common-login-code-form-code"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "email",
+      "name": "email",
+      "id": "TT4B_SSO_AuthBind_Email_Input",
+      "placeholder": "请输入邮箱",
+      "class": "tiktokads-common-login-form-email"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "id": "TikTok_Ads_SSO_AuthBind_Area_Select_Input",
+      "placeholder": "搜索国家/地区或区号",
+      "class": "tiktokads-area-code-input"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "text",
+      "name": "mobile",
+      "id": "TT4B_SSO_AuthBind_Mobile_Input",
+      "placeholder": "请输入你的手机号",
+      "class": "tiktokads-common-account-form-mobile"
+    },
+    {
+      "tagName": "INPUT",
+      "type": "password",
+      "name": "password",
+      "id": "TT4B_SSO_AuthBind_Pwd_Input",
+      "placeholder": "请输入您的密码",
+      "class": "tiktokads-common-login-form-password"
+    },
+    {
+      "tagName": "INPUT",
+      "name": "code",
+      "id": "TT4B_SSO_AuthBind_Code_Input",
+      "placeholder": "请输入验证码",
+      "class": "tiktokads-common-login-code-form-code"
+    }
+  ],
+  "buttons": [
+    {
+      "tagName": "BUTTON",
+      "text": "联系我们"
+    },
+    {
+      "tagName": "BUTTON",
+      "class": "SwitchLangBtn-IYT8C7",
+      "text": "简体中文"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "loginBtn",
+      "id": "TikTok_Ads_SSO_Login_Btn",
+      "class": "btn primary ",
+      "text": "登录"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "loginBtn",
+      "id": "TikTok_Ads_SSO_Code_Login_Btn",
+      "class": "btn primary ",
+      "text": "登录"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "resetPwd",
+      "id": "TikTok_Ads_SSO_FPwd_Reset_Btn",
+      "class": "btn primary ",
+      "text": "重置密码"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "CodeloginBtn",
+      "id": "TikTok_Ads_SSO_Login_Code_Btn",
+      "class": "btn primary ",
+      "text": "登录"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "authBindBtn",
+      "id": "TT4B_SSO_AuthBind_Btn",
+      "class": "btn primary ",
+      "text": "确定"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "signupBtn",
+      "id": "TT4B_SSO_AuthBind_Cancel_Btn",
+      "class": "btn  no-loading",
+      "text": "取消"
+    },
+    {
+      "tagName": "BUTTON",
+      "name": "signupBtn",
+      "id": "TT4B_SSO_AuthBind_Signup_Btn",
+      "class": "btn primary  no-loading",
+      "text": "注册"
+    },
+    {
+      "tagName": "BUTTON",
+      "type": "button",
+      "class": "theme-arco-btn theme-arco-btn-text theme-arco-btn-size-default theme-arco-btn-shape-square theme-m4b-button theme-m4b-button-size-default theme-m4b-dropdown-button theme-m4b-dropdown-button-rotate-arrow p-0 px-8 theme-arco-btn-primary-text",
+      "text": "立即注册"
+    }
+  ],
+  "iframes": [
+    "https://www.tiktok.com/ucenter_web/zti_web"
+  ],
+  "visibility": {
+    "TikTok_Ads_SSO_Login_Email_Input": false,
+    "TikTok_Ads_SSO_Login_Area_Select_Input": false,
+    "TikTok_Ads_SSO_Login_Mobile_Input": true,
+    "TikTok_Ads_SSO_Login_Pwd_Input": true,
+    "TikTok_Ads_SSO_Code_Email_Input": false,
+    "TikTok_Ads_SSO_Code_Area_Select_Input": false,
+    "TikTok_Ads_SSO_Code_Mobile_Input": false,
+    "TikTok_Ads_SSO_Code_Code_Input": false,
+    "TikTok_Ads_SSO_FPwd_Resend_Email_Input": false,
+    "TikTok_Ads_SSO_FPwdResend_Area_Select_Input": false,
+    "TikTok_Ads_SSO_FPwdResend_Mobile_Input": false,
+    "TikTok_Ads_SSO_FPwd_Code_Input": false,
+    "TikTok_Ads_SSO_FPwd_Password_Input": false,
+    "TikTok_Ads_SSO_FPwd_Pre_Password_Input": false,
+    "TikTok_Ads_SSO_Login_Code_Input": false,
+    "TT4B_SSO_AuthBind_Email_Input": false,
+    "TikTok_Ads_SSO_AuthBind_Area_Select_Input": false,
+    "TT4B_SSO_AuthBind_Mobile_Input": false,
+    "TT4B_SSO_AuthBind_Pwd_Input": false,
+    "TT4B_SSO_AuthBind_Code_Input": false
+  },
+  "area_select_value": "",
+  "tab_hints": [
+    "SPAN class=panel-item selected text=手机号",
+    "DIV class=label-text text=手机号",
+    "SPAN class=error-msg text=手机号",
+    "DIV class=label-text text=手机号",
+    "SPAN class=error-msg text=手机号",
+    "DIV class=label-text text=邮箱",
+    "SPAN class=error-msg text=邮箱",
+    "SPAN class=panel-item  text=邮箱",
+    "DIV class=label-text text=邮箱",
+    "SPAN class=error-msg text=邮箱",
+    "A class=information  text=验证码登录"
+  ]
+}

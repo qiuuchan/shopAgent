@@ -7,13 +7,13 @@ channel_tiktok.tiktok_login —— TikTok 账号密码登录与 Cookie 刷新（
 登录态维护与 Cookie 导出。
 
 重要约束（来自交接单 / spike 实测）：
-- **测试店账号尚未就绪**：登录流程代码照写，但**不实际联调**（硬约束）。所有真实浏览器
-  操作（验证码人工等待、域名抓取）仅在运行期发生；本模块不主动发起真实登录。
+- **登录表单选择器已实测回填**（2026-08-28，spike s6_login_form_map）：泰国站登录页
+  默认激活「手机号」登录 tab，账号 / 密码 / 登录按钮选择器见 ``selectors.py`` 登录节；
+  shop_id 当前以账号名占位，oec_seller_id / 店铺标识真实抓取待 TIK-018 实测修正。
 - **登录等待超时对齐 PDD 模式**：经环境变量 ``TIKTOK_LOGIN_WAIT_TIMEOUT_MS`` 读取，缺省
   120000ms（120 秒），与 ``login.playwright_login._login_wait_timeout_ms`` 同口径（需求 4.5）。
-- **登录成功导出**：Cookie 列表转 JSON 字符串；并尝试抓取 ``shop_id`` / ``shop_name``
-  （泰国站店铺标识，spike s1 实测店铺 FunToy Lab）。抓取方式在账号就绪后实测修正
-  （标注「待 TIK-018 实测」）。
+- **登录成功导出**：Cookie 列表转 JSON 字符串（经 BrowserSession.export_cookies_json），
+  并返回实际登录态目录 ``browser_data_dir`` 供 backend 落库、connect 时复用（免二次登录）。
 - **复用公共浏览器启动**：经 ``login.browser_launcher`` 启动持久化上下文，与 PDD 同约定。
 
 实现约束（开发规范）：单文件 ≤500 行（35）、中文注释（37/50）、导入置顶（51）、
@@ -24,11 +24,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import zlib
 from typing import Any, Dict, List, Optional
 
 from channel_tiktok.browser_session import BrowserSession
 from channel_tiktok.selectors import (
+    SELECTOR_LOGIN_CODE_INPUT,
+    SELECTOR_LOGIN_ERROR_HINT,
+    SELECTOR_LOGIN_MOBILE_INPUT,
+    SELECTOR_LOGIN_PASSWORD_INPUT,
+    SELECTOR_LOGIN_SUBMIT_BUTTON,
     TIKTOK_LOGIN_PATH,
     TIKTOK_SELLER_URL,
 )
@@ -41,6 +47,21 @@ _DEFAULT_LOGIN_WAIT_TIMEOUT_MS: int = 120_000
 
 # 账号密码登录是否无头：TikTok 登录含人工验证码，默认非无头（与 PDD BROWSER_HEADLESS 口径）。
 _DEFAULT_LOGIN_HEADLESS: bool = False
+
+# 「明确未登录 / 登录流程中」的 URL 路径标记（spike s1 同款语义）：URL 命中其一
+# 即视为仍在登录页；登录成功后 URL 应跳离这些路径（泰国站实测落点 /homepage）。
+_NOT_LOGIN_PATH_MARKERS: tuple[str, ...] = (
+    "login",
+    "signin",
+    "sign-in",
+    "auth",
+    "register",
+    "account/register",
+    "signup",
+    "sign-up",
+    "passport",
+    "oidc",
+)
 
 
 def _login_wait_timeout_ms() -> int:
@@ -92,24 +113,121 @@ async def _safe_close_session(session: Optional[BrowserSession]) -> None:
             logger.warning("释放 TikTok 浏览器会话失败（可忽略）: %s", exc)
 
 
+async def _wait_login_success(page: Any, wait_timeout_ms: int) -> bool:
+    """轮询等待登录完成（URL 跳离登录页即成功）。
+
+    等待期间若出现可见错误提示（账号 / 密码错误等）则提前返回 False，避免干等
+    满超时；验证码（短信 / 图形）弹出时不做检测，自然等待人工完成。URL 判定
+    复用 spike s1 的「登录 / 注册路径标记」语义，与登录失效标记口径一致。
+
+    Args:
+        page: Playwright 页面对象。
+        wait_timeout_ms: 总等待超时（毫秒）。
+
+    Returns:
+        登录成功返回 True；超时 / 出现错误提示返回 False。
+    """
+    deadline = time.monotonic() + wait_timeout_ms / 1000.0
+    code_hinted = False
+    while time.monotonic() < deadline:
+        # 出现可见错误提示（如「账号或密码错误」）→ 提前判定失败。
+        if await _has_visible_error(page):
+            return False
+        # URL 已跳离登录页 → 登录成功。
+        if await _is_logged_in_url(page):
+            return True
+        # 验证码输入框可见 → 提示人工输入（仅提示一次，避免刷屏）。
+        if not code_hinted:
+            try:
+                if await page.is_visible(SELECTOR_LOGIN_CODE_INPUT):
+                    logger.info(
+                        "检测到验证码输入框，请在浏览器中人工输入短信/图形验证码"
+                    )
+                    code_hinted = True
+            except Exception:  # noqa: BLE001 - 检测失败忽略，继续等待
+                pass
+        await page.wait_for_timeout(2000)
+    logger.warning("登录等待超时（%d 秒），未检测到登录成功", wait_timeout_ms // 1000)
+    return False
+
+
+async def _is_logged_in_url(page: Any) -> bool:
+    """按 URL 判定当前是否已登录（未命中任何登录 / 注册路径标记即视为已登录）。
+
+    Args:
+        page: Playwright 页面对象。
+
+    Returns:
+        已登录返回 True；求值失败返回 False（保守视为未登录）。
+    """
+    try:
+        low_url = (await page.evaluate("location.href")).lower()
+    except Exception:  # noqa: BLE001 - 求值失败视为未登录
+        return False
+    return not any(marker in low_url for marker in _NOT_LOGIN_PATH_MARKERS)
+
+
+async def _has_visible_error(page: Any) -> bool:
+    """检测登录页是否出现可见的错误提示（宽松选择器，见 SELECTOR_LOGIN_ERROR_HINT）。
+
+    Args:
+        page: Playwright 页面对象。
+
+    Returns:
+        存在可见错误提示返回 True；无 / 求值失败返回 False。
+    """
+    try:
+        handle = await page.query_selector(SELECTOR_LOGIN_ERROR_HINT)
+        if handle is None:
+            return False
+        return await handle.is_visible()
+    except Exception:  # noqa: BLE001 - 检测失败保守视为无错误
+        return False
+
+
+async def _try_fetch_shop_name(page: Any) -> Optional[str]:
+    """宽松尝试从登录后页面抓取店铺名称（TikTok 侧店铺标识，待 TIK-018 实测修正）。
+
+    当前实现为「尽力而为」：从页面标题 / 文本中查找店铺名无稳定选择器，抓不到
+    返回 None（由上层以账号名兜底），不阻塞登录流程。
+
+    Args:
+        page: Playwright 页面对象。
+
+    Returns:
+        抓到的店铺名称；抓不到返回 None。
+    """
+    try:
+        title = await page.title()
+        if title and "tiktok" not in title.lower():
+            return title.strip()[:128]
+    except Exception:  # noqa: BLE001 - 抓取失败返回 None
+        pass
+    return None
+
+
 async def login_tiktok(name: str, password: str) -> Optional[Dict[str, Any]]:
     """使用账号密码登录 TikTok 泰国站卖家后台并导出 Cookie 与店铺信息（需求 4.1/4.2/4.5 对齐）。
 
-    以非无头模式启动持久化上下文（默认，便于人工完成验证码），打开登录页并填写账号密码
-    提交；等待登录成功（title 命中成功集合或跳出登录页）直至超时。超时 / 异常统一降级
-    返回 None（不抛异常）。成功则返回含 ``cookies_json`` / ``shop_id`` / ``shop_name`` 的字典。
+    以非无头模式启动持久化上下文（默认，便于人工完成验证码），打开登录页并填写
+    账号密码提交；等待登录成功（URL 跳离登录页 / 出现错误提示提前终止）直至超时。
+    超时 / 异常统一降级返回 None（不抛异常）。成功则返回含 ``cookies_json`` /
+    ``shop_id`` / ``shop_name`` / ``browser_data_dir`` 的字典。
 
-    **标注「待 TIK-018 实测」**：真实登录态判定标记、shop_id/shop_name 抓取选择器，需在测试
-    店账号就绪后实测修正（本函数结构已就位，不阻塞后续纯逻辑开发）。
+    **登录页选择器来自 spike s6_login_form_map 实测**（2026-08-28，泰国站中文界面）：
+    默认激活「手机号」登录 tab，直接填手机号 + 密码 + 点登录；登录后可能出现短信 /
+    图形验证码，需人工完成（等待时间内）；shop_id 当前以账号名占位，oec_seller_id /
+    店铺标识的真实抓取待 TIK-018 实测后回填（见模块 docstring 与 selectors.py）。
 
     Args:
-        name: 登录账号名（用于命名隔离的用户数据目录 ``tiktok_{shop_pk}`` 场景下的标识；
-            此处以账号名为隔离键，与 BrowserSession 的 shop_pk 隔离互补，登录阶段可仅持账号名）。
+        name: 登录账号名（手机号；作为隔离键派生登录期用户数据目录，并作
+            shop_id 占位业务键）。
         password: 账号密码。
 
     Returns:
-        登录成功返回 ``{"cookies_json": str, "shop_id": Optional[str],
-        "shop_name": Optional[str], "name": str}``；失败 / 超时 / 异常返回 None。
+        登录成功返回 ``{"cookies_json": str, "shop_id": str, "shop_name":
+        Optional[str], "name": str, "browser_data_dir": str}``；失败 / 超时 /
+        异常返回 None。
     """
     # 注：登录阶段以账号名 name 作为隔离键（与 BrowserSession 的 shop_pk 维度互补）。
     # 为复用 BrowserSession 的锁清理与启动封装，这里以 name 的哈希派生一个 shop_pk 占位
@@ -130,22 +248,51 @@ async def login_tiktok(name: str, password: str) -> Optional[Dict[str, Any]]:
         # 打开登录页（泰国站固定登录 URL，允许写死基址）。
         login_url = _build_login_url()
         logger.info("账号 '%s' 打开 TikTok 登录页: %s", name, login_url)
-        await page.goto(login_url)
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
 
-        # TODO(TIK-018 实测)：填入账号密码并提交。选择器待测试店账号就绪后按实测回填。
-        # 当前仅占位结构，不实际执行真实填写/提交（硬约束：不真实联调）。
-        #   await page.fill(<账号输入框>, name)
-        #   await page.fill(<密码输入框>, password)
-        #   await page.click(<登录按钮>)
+        # 已登录复用：登录态有效时打开登录页会前端跳转离开（homepage），免填表
+        # 直接导出。先短暂等待 SPA 跳转稳定，未跳离才进入填表流程（幂等重登录 /
+        # 掉线后自动恢复的免登路径，2026-08-28 实测登录态目录复用需要）。
+        await page.wait_for_timeout(3000)
+        if await _is_logged_in_url(page):
+            logger.info("账号 '%s' 检测到已有有效登录态，直接复用（免二次验证）", name)
+            cookies_json = await session.export_cookies_json()
+            return {
+                "cookies_json": cookies_json,
+                "shop_id": name,
+                "shop_name": name,
+                "name": name,
+                "browser_data_dir": session.user_data_dir,
+            }
 
-        # 等待登录成功（title 跳出登录页 / 命中成功集合）。超时即判定失败（需求 4.5 对齐）。
-        # success_condition 待 TIK-018 实测确认后补全；结构如下：
-        #   await page.wait_for_function(<成功判定>, timeout=wait_timeout)
-        logger.warning(
-            "账号 '%s' 登录流程为占位实现，待 TIK-018 实测（不真实联调）", name
+        # 等待登录表单渲染（SPA 动态渲染），填写账号密码并提交。
+        await page.wait_for_selector(SELECTOR_LOGIN_MOBILE_INPUT, timeout=30_000)
+        await page.fill(SELECTOR_LOGIN_MOBILE_INPUT, name)
+        await page.fill(SELECTOR_LOGIN_PASSWORD_INPUT, password)
+        await page.click(SELECTOR_LOGIN_SUBMIT_BUTTON)
+        logger.info(
+            "账号 '%s' 已提交登录表单，等待登录完成（最多 %d 秒，"
+            "若有验证码请在浏览器中人工完成）",
+            name,
+            wait_timeout // 1000,
         )
-        # 占位返回：不触发真实等待，直接以 None 表示「未实测」。
-        return None
+
+        # 等待登录成功（URL 跳离登录页 / 出现错误提示提前终止）。
+        if not await _wait_login_success(page, wait_timeout):
+            logger.warning("账号 '%s' 登录未成功（超时或账号密码错误）", name)
+            return None
+
+        # 登录成功：导出 Cookie 与登录态目录，供 backend 落库与 connect 复用。
+        cookies_json = await session.export_cookies_json()
+        shop_name = await _try_fetch_shop_name(page) or name
+        logger.info("账号 '%s' 登录成功，已导出 %d 个 Cookie", name, len(cookies_json))
+        return {
+            "cookies_json": cookies_json,
+            "shop_id": name,
+            "shop_name": shop_name,
+            "name": name,
+            "browser_data_dir": session.user_data_dir,
+        }
     except Exception as exc:  # noqa: BLE001 - 登录异常统一降级
         logger.error("账号 '%s' TikTok 登录异常: %s", name, exc)
         return None

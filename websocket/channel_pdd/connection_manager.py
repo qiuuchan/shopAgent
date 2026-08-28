@@ -121,6 +121,7 @@ def create_channel(
     enable_notify: bool = True,
     consumer: Optional[MessageConsumer] = None,
     proxy_server: Optional[str] = None,
+    browser_data_dir: Optional[str] = None,
 ) -> ChannelAdapter:
     """创建一个「连接 + 消费器」已串联的通道（不自动启动，按 platform 分派）。
 
@@ -135,6 +136,9 @@ def create_channel(
         consumer: 可注入的消费器（便于测试）；缺省按本店铺构造。
         proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 tiktok 分支建
             浏览器会话时注入 BrowserSession；None 表示不走代理，PDD 分支不使用）。
+        browser_data_dir: TikTok 登录态浏览器用户数据目录（建店登录后落库
+            Shop.browser_data_dir，连接时复用免二次登录；None 表示按 shop_pk
+            推导默认目录，兼容存量店铺）。
 
     Returns:
         已按平台分派的通道实例（PDD 走 PDDChannel；tiktok 走 TikTokChannel 真实现，
@@ -163,10 +167,15 @@ def create_channel(
 
         logger.info("创建 TikTok 真实通道: shop_id=%s, user_id=%s", shop_id, user_id)
 
-        # 工厂建一个浏览器会话（注入店铺出口代理，仅 TikTok 通道消费，Phase 2 前置），
-        # 同时注入 TikTokChannel 与 TikTokSender，避免两者各自自建第二份会话，
-        # 保证「发送与监控同页」。
-        browser_session = BrowserSession(shop_pk=shop_pk, proxy_server=proxy_server)
+        # 工厂建一个浏览器会话（注入店铺出口代理与登录态目录，仅 TikTok 通道消费；
+        # browser_data_dir 为建店登录后落库的登录态目录，复用免二次登录），同时注入
+        # TikTokChannel 与 TikTokSender，避免两者各自自建第二份会话，保证「发送与
+        # 监控同页」。
+        browser_session = BrowserSession(
+            shop_pk=shop_pk,
+            proxy_server=proxy_server,
+            user_data_dir=browser_data_dir,
+        )
 
         settings = get_settings()
         # 发送器需与主循环桥接（线程内同步调用经 run_coroutine_threadsafe 调度回主循环）。
@@ -260,6 +269,7 @@ async def start_channel(
     channel_name: str = "pinduoduo",
     enable_notify: bool = True,
     proxy_server: Optional[str] = None,
+    browser_data_dir: Optional[str] = None,
 ) -> ChannelAdapter:
     """创建、启动并登记一个店铺连接（端到端链路就绪，按 platform 分派）。
 
@@ -272,6 +282,8 @@ async def start_channel(
         enable_notify: 是否启用系统事件通知。
         proxy_server: 店铺出口代理服务器地址（Phase 2 前置，仅 tiktok 分支消费，
             透传给 create_channel → BrowserSession；None 表示不走代理）。
+        browser_data_dir: TikTok 登录态浏览器用户数据目录（建店登录后落库
+            Shop.browser_data_dir，连接时复用免二次登录；None 按 shop_pk 推导）。
 
     Returns:
         已启动并登记到连接注册表的通道实例（PDD / TikTok 真实现按平台分派）。
@@ -296,6 +308,7 @@ async def start_channel(
         channel_name=channel_name,
         enable_notify=enable_notify,
         proxy_server=proxy_server,
+        browser_data_dir=browser_data_dir,
     )
     await channel.start()
     connection_registry.register(shop_id, user_id, channel)
@@ -321,9 +334,11 @@ async def start_enabled_channels() -> int:
         本次实际新启动的店铺连接数量。
     """
     # 一次性读出启用店铺的最小必要字段（独立短事务，读完即释放连接）。
-    # 读出启用店铺的（shop_id, shop_pk, owner_user_id, platform, proxy_server）
-    # 最小必要字段（proxy_server 为 Phase 2 前置店铺级代理，仅 TikTok 通道消费）。
-    shops: list[tuple[str, int, Optional[int], str, Optional[str]]] = []
+    # 读出启用店铺的（shop_id, shop_pk, owner_user_id, platform, proxy_server,
+    # browser_data_dir）最小必要字段（proxy_server / browser_data_dir 为 TikTok
+    # 通道专用：代理为 Phase 2 前置店铺级出口；browser_data_dir 为建店登录后
+    # 落库的登录态目录，连接时复用免二次登录）。
+    shops: list[tuple[str, int, Optional[int], str, Optional[str], Optional[str]]] = []
     try:
         with session_scope() as session:
             enabled_shops = Repository(Shop, session).list(
@@ -339,8 +354,19 @@ async def start_enabled_channels() -> int:
                     shop_platform = PLATFORM_PDD
                 # 店铺出口代理（空串 / 缺失归一为 None = 不走代理）。
                 proxy_server = str(getattr(shop, "proxy_server", None) or "").strip() or None
+                # TikTok 登录态目录（空串 / 缺失归一为 None = 按 shop_pk 推导）。
+                browser_data_dir = (
+                    str(getattr(shop, "browser_data_dir", None) or "").strip() or None
+                )
                 shops.append(
-                    (shop_id, shop.id, shop.owner_user_id, shop_platform, proxy_server)
+                    (
+                        shop_id,
+                        shop.id,
+                        shop.owner_user_id,
+                        shop_platform,
+                        proxy_server,
+                        browser_data_dir,
+                    )
                 )
     except Exception as exc:  # noqa: BLE001 - 读库失败不应中断服务启动
         logger.error("读取启用店铺列表失败，跳过自动启动连接: %s", exc)
@@ -352,7 +378,7 @@ async def start_enabled_channels() -> int:
 
     logger.info("服务启动：开始自动拉起 %d 个已启用店铺的连接", len(shops))
     started = 0
-    for shop_id, shop_pk, owner_user_id, shop_platform, proxy_server in shops:
+    for shop_id, shop_pk, owner_user_id, shop_platform, proxy_server, browser_data_dir in shops:
         try:
             await start_channel(
                 shop_id,
@@ -360,6 +386,7 @@ async def start_enabled_channels() -> int:
                 owner_user_id,
                 platform=shop_platform,
                 proxy_server=proxy_server,
+                browser_data_dir=browser_data_dir,
             )
             started += 1
         except Exception as exc:  # noqa: BLE001 - 单店铺启动失败不影响其它店铺

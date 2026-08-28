@@ -84,6 +84,14 @@ class Shop(AuditMixin, Base):
         nullable=True,
         comment="出口代理服务器地址（如 http://host:port，空=不走代理，店铺级）",
     )
+    # 登录态浏览器用户数据目录（TikTok 通道登录期实际使用目录，建店登录后落库，
+    # connect 时复用，保证「登录一次、免登复用」；PDD 通道不使用；经启动自检
+    # 迁移器幂等补列，存量店铺为空，缺省按 shop_pk 推导目录，行为不变）。
+    browser_data_dir: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="TikTok 登录态浏览器用户数据目录（登录后落库，connect 复用）",
+    )
     # 拼多多店铺业务标识（非主键，业务键的一部分）
     shop_id: Mapped[str] = mapped_column(
         String(128), nullable=False, comment="拼多多店铺业务标识（业务键，非主键）"

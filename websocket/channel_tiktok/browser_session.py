@@ -25,6 +25,7 @@ channel_tiktok.browser_session —— TikTok 每店独立浏览器会话
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Callable, Optional
@@ -132,6 +133,26 @@ class BrowserSession:
             当前会话的 Playwright Page 对象；未启动返回 None。
         """
         return self._page
+
+    async def export_cookies_json(self) -> str:
+        """导出当前会话全部 Cookie 为 ``{name: value}`` 映射的 JSON 字符串。
+
+        供登录 / 刷新流程导出登录态（TikTok 登录态常驻 user-data-dir，Cookie 导出
+        仅作凭据存档，与 PDD 的 cookies_enc 刷新口径区分）。
+
+        Returns:
+            ``{name: value}`` 映射的 JSON 字符串（ensure_ascii=False，保留中文）；
+            上下文未启动时返回 ``"{}"``。
+        """
+        if self._context is None:
+            return "{}"
+        cookies = await self._context.cookies()
+        cookie_map = {
+            item.get("name", ""): item.get("value", "")
+            for item in cookies
+            if item.get("name")
+        }
+        return json.dumps(cookie_map, ensure_ascii=False)
 
     async def start(self) -> None:
         """启动浏览器会话：清锁 → 启动持久化上下文 → 开首页（TIK-009 复用）。
