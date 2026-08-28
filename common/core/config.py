@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 common.core.config —— 统一配置加载模块
 ======================================
@@ -142,6 +142,25 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     browser_headless: bool = Field(default=False)
     max_captcha_concurrent: int = Field(default=1)
+
+    # ------------------------------------------------------------------
+    # TikTok 店铺通道配置（需求 24.x，TIK-017）
+    # 灰度总开关 tiktok_shop_enabled：默认关闭，false 时 websocket 侧拒绝 TikTok
+    # 店铺的连接请求（创建通道即抛错 → 路由返回失败响应），防止误接入；
+    # 其余参数为 TikTokChannel 监控 / 发送 / 登录链路的默认值（均可在 .env 覆盖）。
+    # ------------------------------------------------------------------
+    # 灰度总开关：是否允许建立 TikTok 店铺连接（默认 false——灰度期先关后开）
+    tiktok_shop_enabled: bool = Field(default=False)
+    # 监控循环轮询间隔（秒），默认 5.0（会话列表快照抓取周期）
+    tiktok_poll_interval_seconds: float = Field(default=5.0)
+    # 会话回复去抖静默阈值（秒），默认 45.0（卖家回复后窗口期内不回）
+    tiktok_debounce_seconds: float = Field(default=45.0)
+    # DOM 发送超时（秒），默认 15.0（消息流出现己方气泡视为成功）
+    tiktok_send_timeout_seconds: float = Field(default=15.0)
+    # 登录等待超时（毫秒），默认 120000（预留人工完成验证码时间，对齐 PDD 口径）
+    tiktok_login_wait_timeout_ms: int = Field(default=120_000)
+    # 最大并发浏览器实例数，默认 4（超限拒绝新连接并告警，防资源耗尽）
+    tiktok_max_browser_instances: int = Field(default=4)
 
     # ------------------------------------------------------------------
     # 初始管理员账号（需求 1 / 2：首次启动自检时幂等创建超级管理员）

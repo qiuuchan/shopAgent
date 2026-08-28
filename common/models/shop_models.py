@@ -66,6 +66,24 @@ class Shop(AuditMixin, Base):
     channel_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, comment="所属渠道 ID（普通列，无外键）"
     )
+    # 所属平台：pdd=拼多多 / tiktok=TikTok Shop（需求 24.x 多平台分派前置）。
+    # 存量店铺经启动迁移自动归 'pdd'，新接入平台经 TIK-002~TIK-017 逐步打通；
+    # 枚举值入 sys_dict（dict_type='platform'），前端据字典渲染中文与徽标。
+    platform: Mapped[str] = mapped_column(
+        String(32),
+        default="pdd",
+        nullable=False,
+        comment="所属平台：pdd=拼多多 / tiktok=TikTok Shop（字典 platform）",
+    )
+    # 出口代理服务器地址（Phase 2 前置，店铺级）：如 ``http://host:port`` /
+    # ``socks5://host:port``；空（None）= 不走代理（默认关闭）。仅 TikTok 通道
+    # 建浏览器会话时消费（BrowserSession.launch 参数 proxy），PDD 通道不使用；
+    # 经启动自检迁移器幂等补列，存量店铺为空不受影响。
+    proxy_server: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="出口代理服务器地址（如 http://host:port，空=不走代理，店铺级）",
+    )
     # 拼多多店铺业务标识（非主键，业务键的一部分）
     shop_id: Mapped[str] = mapped_column(
         String(128), nullable=False, comment="拼多多店铺业务标识（业务键，非主键）"

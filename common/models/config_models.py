@@ -43,6 +43,12 @@ class BusinessHours(AuditMixin, Base):
     end_time: Mapped[object | None] = mapped_column(
         Time, nullable=True, comment="营业结束时刻（北京时间，可跨午夜）"
     )
+    # 星期维度：逗号分隔的星期序号（1=周一 … 7=周日），如 "1,2,3,4,5" 表示周一至周五；
+    # 空串 = 不限定星期 = 每天（兼容旧数据，旧数据零迁移负担）。需求 11.x 扩展。
+    weekdays: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, default="", server_default="",
+        comment="营业星期维度（逗号分隔 1~7，空=每天；1=周一…7=周日）",
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False, comment="是否启用"
     )
