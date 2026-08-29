@@ -49,7 +49,7 @@ from common.utils.latency import (
 # ----------------------------------------------------------------------
 # 数据库访问
 # ----------------------------------------------------------------------
-def _make_session_factory(db_url: Optional[str]) -> sessionmaker:
+def make_session_factory(db_url: Optional[str]) -> sessionmaker:
     """构造会话工厂：--db 指定时用该 URL（本地 sqlite 验证），否则走系统配置。
 
     系统配置路径为 common.db.session.get_session_factory()（MySQL 连接池单例，
@@ -264,7 +264,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             hour=0, minute=0, second=0, microsecond=0
         )
 
-    factory = _make_session_factory(args.db)
+    factory = make_session_factory(args.db)
     with factory() as session:
         messages = query_messages(session, args.shop, since, until)
 

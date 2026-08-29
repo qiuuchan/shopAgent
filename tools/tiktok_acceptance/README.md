@@ -7,8 +7,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `latency.py` | 首响时长统计纯函数（不依赖 common，可单测）：回复周期切分、>300s 超时判定 |
 | `reconcile.py` | 对账 CLI：按店铺 + 时间窗口统计收发消息与首响时长，供与 seller center 人工对账 |
+| `first_response_drill.py` | 首响统计验收演练 CLI（TIK-025）：真实库 + 真实 backend 统计服务跑一遍，并与 `reconcile.py` 逐项抽查口径一致性（详见 §7） |
 | `risk_rule_drill.py` | 风控频率断路器配置演练 CLI（TIK-020）：真实库配规则 + 真实决策链驱动，验证超限暂停与风控日志落库，配置指引见 [RISK_RULE_GUIDE.md](../../RISK_RULE_GUIDE.md) |
 | `login_expiry.py` | 登录态过期观测 CLI（TIK-023）：统计 `login_expired` 事件间隔、推算建议巡检周期、核对巡检覆盖率 |
 | `tests/`（`../tests/`） | 纯函数单测 + SQLite 内存库集成测试（16 个 + TIK-020/TIK-023 新增） |
@@ -234,3 +234,61 @@ T0（置故障）／T1（告警到达企微）／T2（人工重登完成）／T3
 login_recovery 是否接管（是/否）：  恢复后是否需人工重启服务（是/否）：
 结论（通过/不通过）：  偏差说明：
 ```
+
+---
+
+## 7. TIK-025 首响统计验收演练（first_response_drill.py）
+
+> 工单：[TICKETS_TIKTOK.md](../../TICKETS_TIKTOK.md) TIK-025 ｜ 统计口径：`common/utils/latency.py`
+> （原 `latency.py` 已于 TIK-025 上移 common，对账工具、统计接口、跌破阈值告警三处共用同一实现）
+
+### 7.1 演练做什么
+
+用**真实库 + 真实 backend 统计服务**（`app.services.first_response_service`，与
+`GET /api/v1/dashboard/first-response` 同一实现）跑一遍首响统计，再用 `reconcile.py`
+对**同窗口同店铺**重算一遍，逐项抽查两者口径是否一致，并输出分布 / 超 5 分钟占比 /
+回复率与分店铺明细供人工核对 dashboard。
+
+**隔离边界**：只读（`pdd_chat_message` / `pdd_shop` / `sys_user` / `sys_role`），
+不写任何业务表、不触发发送与通知、不拉浏览器。统计以管理员身份执行（避开数据范围
+隔离干扰；隔离本身由 `backend/tests/test_first_response_api.py` 覆盖）。
+
+### 7.2 跑法
+
+```bash
+# 默认最近 7 天
+./.venv/Scripts/python tools/tiktok_acceptance/first_response_drill.py --shop 1
+
+# 指定窗口 + 平台筛选
+./.venv/Scripts/python tools/tiktok_acceptance/first_response_drill.py --shop 1 \
+    --since 2026-08-23 --until 2026-08-29 --platform tiktok
+
+# JSON 全量输出（便于归档）
+./.venv/Scripts/python tools/tiktok_acceptance/first_response_drill.py --shop 1 --days 1 --json
+```
+
+退出码：`0` = 8 项口径抽查全部一致；`1` = 存在不一致或查询失败（无管理员用户 /
+店铺不存在 / 平台与店铺不匹配等）。
+
+> `--since/--until` 支持 `YYYY-MM-DD`（自动补齐 00:00:00 / 23:59:59）与 ISO 日期时间。
+
+### 7.3 口径抽查项与判读
+
+抽查 8 项：`responded_cycles` / `pending_cycles` / `pending_conversations` /
+`over_threshold_count` / `over_threshold_ratio` / `mean_seconds` / `p50_seconds` /
+`p90_seconds`。任一项不一致即退出码 1，并在报告 `mismatched_fields` 中列出。
+
+比对前提：两者窗口须一致——backend 按自然日 `[start 00:00, end+1d 00:00)`，
+`reconcile` 按 `[since, until]`（含端点）。演练 CLI 已统一为自然日边界，直接用
+`--since/--until` 传同一组日期即可，无需手工换算。
+
+### 7.4 回复率口径（TIK-026 告警同源）
+
+`回复率 =（已回复周期 − 超时周期）/（已回复周期 + 待回复周期）`：
+
+- 首响 >300 秒（5 分钟标准）计**超时**；窗口结束仍无回复计**待回复**；
+- 超时与待回复**均计未达标**，待回复计入分母；
+- 无任何周期时返回 `None`（无数据，不判 0 也不判 1）。
+
+该口径实现于 `common.utils.latency.reply_rate`，TIK-026「24h 回复率跌破 85% 告警」
+复用同一函数，保证看板与告警判定同源。
