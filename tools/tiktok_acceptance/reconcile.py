@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -37,13 +36,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from common.models.log_models import ChatMessage
-
-# 同目录模块：脚本直跑（sys.path[0]=本目录）与包导入（pytest）两种场景均需可达
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPT_DIR)
-
-from latency import DIRECTION_IN, DIRECTION_OUT, PendingCycle, compute_cycles, first_response_stats
+# 首响口径纯函数：与 backend 统计接口共用同一实现（TIK-025 上移 common，避免两处各算各的）
+from common.utils.latency import (
+    DIRECTION_IN,
+    DIRECTION_OUT,
+    PendingCycle,
+    compute_cycles,
+    first_response_stats,
+)
 
 
 # ----------------------------------------------------------------------
