@@ -48,6 +48,19 @@ logger = logging.getLogger("scheduler.task_runners")
 # 店铺「启用」状态值（与 shop_models.Shop.status 约定一致：1=启用）。
 _SHOP_STATUS_ENABLED: int = 1
 
+# 登录态巡检结果取值（TIK-023，跨服务契约）：与 websocket 侧
+# channel_tiktok.login_probe 的常量一一对应。scheduler 不导入 websocket 模块，
+# 仅按字符串取值比对，避免跨服务耦合。取值改动须同步两侧。
+_LOGIN_PROBE_OK: str = "ok"
+_LOGIN_PROBE_LABELS: Dict[str, str] = {
+    "ok": "登录态有效",
+    "login_expired": "主站登录态失效（跳登录页）",
+    "im_expired": "IM 会话过期弹窗",
+    "page_dead": "页面存活探测失败（浏览器已退出）",
+    "channel_absent": "无活跃页面（未连接或窗口外）",
+    "unknown": "探测异常（不误报，待复核）",
+}
+
 
 def _list_enabled_shops(session: Session) -> List[Tuple[int, str, int | None]]:
     """查询全部启用状态的店铺（参数化查询）。
@@ -94,7 +107,9 @@ def run_cookie_refresh() -> None:
 
     遍历全部启用店铺（含 TikTok），按平台透传刷新请求：PDD 店铺经 websocket 侧
     ``refresh_pdd_cookies`` 实际刷新；TikTok 店铺登录态常驻浏览器目录，websocket 侧
-    跳过刷新（Phase 2 保活，防误走 PDD 路径）。汇总成功 / 失败数量并写一条执行日志。
+    跳过刷新并回传登录态巡检结果（Phase 2 保活 + TIK-023 过期周期观测打点）。
+    汇总成功 / 失败数量并写一条执行日志；TikTok 店铺巡检异常时另附明细，串起
+    「何时仍正常 / 何时已失效」的时间线供登录态过期周期观测取数。
     任一店铺调用失败不中断整体遍历。
     """
     try:
@@ -110,22 +125,53 @@ def run_cookie_refresh() -> None:
 
     success_count = 0
     failed_count = 0
+    # TikTok 店铺登录态巡检异常明细（TIK-023 观测数据源）。
+    probe_notes: List[str] = []
     for shop_pk, shop_id, owner_user_id, platform in shops:
         result = service_client.trigger_cookie_refresh(
             shop_pk, shop_id, owner_user_id, platform=platform
         )
         if result.ok:
             success_count += 1
+            _collect_login_probe_note(result, shop_id, platform, probe_notes)
         else:
             failed_count += 1
             logger.warning("店铺[%s] Cookie 刷新失败：%s", shop_id, result.message)
 
     message = f"Cookie 刷新完成：成功 {success_count} 个，失败 {failed_count} 个"
+    if probe_notes:
+        message += "；" + "；".join(probe_notes)
     # 只要有失败店铺即记为 failed，便于运维感知（但任务本身已尽力执行全部店铺）。
+    # 巡检异常不改变成败语义：巡检仅观测，异常由告警链路与主循环各自处置。
     if failed_count > 0:
         task_run_log.write_failed(TASK_COOKIE_REFRESH, message)
     else:
         task_run_log.write_success(TASK_COOKIE_REFRESH, message)
+
+
+def _collect_login_probe_note(
+    result: Any, shop_id: str, platform: str, probe_notes: List[str]
+) -> None:
+    """收集 TikTok 店铺的登录态巡检异常明细（TIK-023 观测，纯整理无 I/O）。
+
+    仅 TikTok 店铺回传 ``data.login_probe``；取值为 ``ok`` 表示登录态有效不记录
+    （避免执行日志被常态打点刷屏），其余取值按「店铺[xx] 巡检异常：中文说明」
+    追加到 ``probe_notes``，随本次任务的执行日志一并落库。
+
+    Args:
+        result: websocket 侧返回的 ``CallResult``（含可选 data.login_probe）。
+        shop_id: 店铺业务标识（仅用于日志定位）。
+        platform: 平台标识（仅 tiktok 才可能有巡检结果）。
+        probe_notes: 待追加的巡检明细列表（原地追加）。
+    """
+    if platform != "tiktok":
+        return
+    probe = (result.data or {}).get("login_probe")
+    if not probe or probe == _LOGIN_PROBE_OK:
+        return
+    label = _LOGIN_PROBE_LABELS.get(probe, probe)
+    logger.warning("店铺[%s] TikTok 登录态巡检异常：%s", shop_id, label)
+    probe_notes.append(f"店铺[{shop_id}] 巡检异常：{label}")
 
 
 def run_product_sync() -> None:

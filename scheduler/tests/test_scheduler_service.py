@@ -297,6 +297,82 @@ def test_run_cookie_refresh_tiktok_platform_passed(db_session: Session, monkeypa
     assert logs[0].run_result == RESULT_SUCCESS
 
 
+def test_run_cookie_refresh_tiktok_probe_ok_not_logged(
+    db_session: Session, monkeypatch
+):
+    """TikTok 巡检 ok：不打点，执行日志与改造前一致（避免常态刷屏）。"""
+    Repository(Shop, db_session).create(
+        shop_id="S_TK", shop_name="TikTok店", owner_user_id=1, status=1, platform="tiktok"
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        service_client, "trigger_cookie_refresh",
+        lambda shop_pk, shop_id, owner_user_id, platform="pdd":
+            service_client.CallResult(ok=True, message="ok", data={"login_probe": "ok"}),
+    )
+    task_runners.run_cookie_refresh()
+
+    logs = Repository(TaskRunLog, db_session).list(filters={"task_key": TASK_COOKIE_REFRESH})
+    assert logs[0].run_result == RESULT_SUCCESS
+    assert logs[0].message == "Cookie 刷新完成：成功 1 个，失败 0 个"
+    assert "巡检异常" not in logs[0].message
+
+
+def test_run_cookie_refresh_tiktok_probe_abnormal_appended(
+    db_session: Session, monkeypatch
+):
+    """TikTok 巡检异常：明细追加到执行日志，构成 TIK-023 观测时间线。"""
+    Repository(Shop, db_session).create(
+        shop_id="S_TK", shop_name="TikTok店", owner_user_id=1, status=1, platform="tiktok"
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        service_client, "trigger_cookie_refresh",
+        lambda shop_pk, shop_id, owner_user_id, platform="pdd":
+            service_client.CallResult(
+                ok=True, message="ok", data={"login_probe": "im_expired"}
+            ),
+    )
+    task_runners.run_cookie_refresh()
+
+    logs = Repository(TaskRunLog, db_session).list(filters={"task_key": TASK_COOKIE_REFRESH})
+    assert "店铺[S_TK] 巡检异常：IM 会话过期弹窗" in logs[0].message
+    # 巡检异常不改变任务成败语义（巡检只观测，处置归告警链路与主循环）。
+    assert logs[0].run_result == RESULT_SUCCESS
+
+
+def test_run_cookie_refresh_pdd_ignores_probe(db_session: Session, monkeypatch):
+    """PDD 店铺即使回传 login_probe 也不记录（零行为变更）。"""
+    Repository(Shop, db_session).create(
+        shop_id="S1", shop_name="店1", owner_user_id=1, status=1
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        service_client, "trigger_cookie_refresh",
+        lambda shop_pk, shop_id, owner_user_id, platform="pdd":
+            service_client.CallResult(
+                ok=True, message="ok", data={"login_probe": "im_expired"}
+            ),
+    )
+    task_runners.run_cookie_refresh()
+
+    logs = Repository(TaskRunLog, db_session).list(filters={"task_key": TASK_COOKIE_REFRESH})
+    assert logs[0].message == "Cookie 刷新完成：成功 1 个，失败 0 个"
+
+
+def test_collect_login_probe_note_unknown_value_passthrough():
+    """未登记的巡检取值原样记录，便于排障时不丢信息。"""
+    notes: list[str] = []
+    task_runners._collect_login_probe_note(
+        service_client.CallResult(ok=True, data={"login_probe": "future_value"}),
+        "S9", "tiktok", notes,
+    )
+    assert notes == ["店铺[S9] 巡检异常：future_value"]
+
+
 def test_run_product_sync_with_failure(db_session: Session, monkeypatch):
     """部分店铺同步失败：记失败执行日志（需求 21.2）。"""
     Repository(Shop, db_session).create(
