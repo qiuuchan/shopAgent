@@ -8,6 +8,8 @@ websocket.routes.cookies —— Cookie 刷新接口（供 scheduler 调用）
 - ``POST /cookies/refresh``：按 (shop_id, owner_user_id) 定位账号名后，复用
   ``channel_pdd.pdd_login.refresh_pdd_cookies`` 无头刷新 Cookie 并维护登录态；
   刷新成功后将新 Cookie 以可逆加密回写 account 表（不返回明文，需求 3.6）。
+  TikTok 店铺登录态常驻浏览器目录，本接口对其**跳过刷新**，改作登录态周期巡检
+  触发点（TIK-023），只读探测结果随 ``data.login_probe`` 回传。
 
 接口约定（开发规范 1-3）：HTTP 恒返回 200，业务成败由统一响应体
 ``{code, success, message, data}`` 表达。地址经环境变量配置（禁止写死 localhost，
@@ -26,9 +28,15 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from channel_pdd import pdd_login
+from channel_pdd import connection_registry
 from channel_pdd.core.credential_store import (
     load_account_credentials,
     update_account_cookies,
+)
+from channel_tiktok.login_probe import (
+    LOGIN_PROBE_NO_CHANNEL,
+    LOGIN_PROBE_UNKNOWN,
+    describe,
 )
 from common.schemas.common import ApiResponse, error_response, success_response
 from engine.alert_dedup import build_alert_notifier, get_alert_dedup
@@ -67,6 +75,33 @@ def _alert_cookie_refresh_failed(shop_pk: int, shop_id: str, reason: str) -> Non
         )
 
 
+async def _probe_tiktok_login_state(payload: "RefreshCookieRequest") -> str:
+    """TikTok 店铺登录态巡检（TIK-023 观测）：取活跃通道并只读探测登录态。
+
+    TikTok 登录态常驻浏览器目录，本任务不刷新 Cookie，只借这个周期做一次只读
+    巡检打点：通道存在则调其 ``probe_login_state``（与监控循环同口径，但不置状态
+    不发告警）；无活跃通道（未连接 / 营业时间窗外）记为 ``channel_absent``，属
+    正常期望态而非故障。探测异常记 ``unknown``，一律不影响本路由返回 success。
+
+    Args:
+        payload: 含 shop_id / owner_user_id 的请求体（用于定位活跃通道）。
+
+    Returns:
+        巡检结果取值字符串（见 ``channel_tiktok.login_probe`` 模块级常量）。
+    """
+    channel = connection_registry.get(payload.shop_id, payload.owner_user_id)
+    probe = getattr(channel, "probe_login_state", None)
+    if probe is None:
+        return LOGIN_PROBE_NO_CHANNEL
+    try:
+        return await probe()
+    except Exception as exc:  # noqa: BLE001 - 巡检失败不得影响本路由响应
+        logger.warning(
+            "TikTok 登录态巡检异常（已忽略）: shop_id=%s, %s", payload.shop_id, exc
+        )
+        return LOGIN_PROBE_UNKNOWN
+
+
 class RefreshCookieRequest(BaseModel):
     """Cookie 刷新请求体（与 scheduler service_client 约定一致）。"""
 
@@ -89,6 +124,10 @@ async def refresh_cookie(payload: RefreshCookieRequest) -> ApiResponse:
     成败本路由都不抛异常：成功返回 success；登录态失效 / 失败返回 error_response。
     对外响应不包含 Cookie 明文（需求 3.6）。
 
+    TikTok 店铺（platform=tiktok）走独立短路分支：不做任何 Cookie 刷新，仅调用
+    ``_probe_tiktok_login_state`` 做一次只读登录态巡检（TIK-023 过期周期观测），
+    结果随 ``data.login_probe`` 回传，恒返回 success。
+
     Args:
         payload: 含 shop_pk / shop_id / owner_user_id 的刷新请求体。
 
@@ -97,10 +136,21 @@ async def refresh_cookie(payload: RefreshCookieRequest) -> ApiResponse:
     """
     # TikTok 店铺登录态常驻浏览器用户数据目录，无需刷新 Cookie（TIK-016）。
     # 该短路置于 owner_user_id 校验之前；告警链路（TIK-005）与两处触发调用一律不动。
+    # TIK-023：本分支兼作登录态巡检触发点——周期打点串起「正常/失效」时间线，供
+    # 观测登录态过期周期；恒返回 success，不因巡检结果改变任务成败语义。
     if payload.platform == "tiktok":
+        login_probe = await _probe_tiktok_login_state(payload)
         return success_response(
-            data={"shop_id": payload.shop_id, "shop_pk": payload.shop_pk, "skipped": True},
-            message="TikTok 店铺登录态常驻浏览器目录，跳过 Cookie 刷新",
+            data={
+                "shop_id": payload.shop_id,
+                "shop_pk": payload.shop_pk,
+                "skipped": True,
+                "login_probe": login_probe,
+            },
+            message=(
+                "TikTok 店铺登录态常驻浏览器目录，跳过 Cookie 刷新"
+                f"（巡检：{describe(login_probe)}）"
+            ),
         )
 
     # owner_user_id 缺失无法定位账号凭据，直接返回失败（不抛异常）。

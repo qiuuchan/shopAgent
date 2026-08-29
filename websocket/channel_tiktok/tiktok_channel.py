@@ -45,6 +45,7 @@ from channel_tiktok.conversation_nav import (
     COLLECT_CARDS_JS,
     click_conversation_exact,
 )
+from channel_tiktok import login_probe
 from channel_tiktok.login_recovery import wait_login_recovery
 from channel_tiktok.selectors import (
     IM_EXPIRED_MODAL_MARKERS,
@@ -433,6 +434,25 @@ class TikTokChannel:
             is_stopped=self._is_stopped,
             interval=self.login_recovery_interval,
             max_tries=self.login_recovery_max_tries,
+        )
+
+    async def probe_login_state(self) -> str:
+        """登录态巡检（TIK-023 观测用）：只读判定当前登录态，不做任何处置。
+
+        供 scheduler 的 cookie_refresh 周期任务在 TikTok 侧作为巡检触发点调用，
+        串起「何时仍正常 / 何时已失效」的时间线以观测登录态过期周期。与监控循环
+        的每轮检测同口径，但**只判定不处置**：不置状态、不发告警、不重开页面，
+        避免巡检反过来干扰主链路（去重告警、重复恢复探测）。
+
+        Returns:
+            巡检结果取值字符串（见 ``channel_tiktok.login_probe`` 模块级常量）。
+        """
+        return await login_probe.probe_login_state(
+            has_page=lambda: self._browser_session is not None
+            and self._browser_session.page is not None,
+            page_alive=self._check_page_alive,
+            is_login_expired=self._is_login_expired,
+            is_im_expired=self._is_im_login_expired,
         )
 
     # ------------------------------------------------------------------
