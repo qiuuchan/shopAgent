@@ -45,6 +45,7 @@ from channel_tiktok.login_recovery import wait_login_recovery
 from channel_tiktok.selectors import (
     IM_EXPIRED_MODAL_MARKERS,
     LOGIN_PAGE_MARKERS,
+    SELECTOR_CONVERSATION_ITEM,
     TIKTOK_CHAT_PATH,
     TIKTOK_CHAT_URL_TEMPLATE,
     TIKTOK_SELLER_URL,
@@ -65,14 +66,13 @@ MessageHandler = Callable[..., Any]
 # 事件通知器签名：event_notifier(event_type: str, content: str) -> Any
 EventNotifier = Callable[[str, str], Any]
 
-# 会话快照抓取 JS（TIK-018 实测实现，在聊天页上下文执行）。
-# 选择器与 selectors.py 的 SELECTOR_CONVERSATION_ITEM / SELECTOR_CONVERSATION_ITEM_
-# USERNAME / SELECTOR_UNREAD_BADGE 保持同步（JS 字符串内不便引用 Python 常量）。
-# 产出：仅含未读角标会话的 [{name, content}]；content 为剔除用户名 / 纯数字角标 /
-# 状态标签（未回复/人工/已回复/置顶）后的最新消息预览。
-_CONVERSATION_SNAPSHOT_JS = """
+# 未读会话卡收集 JS（TIK-018 实测实现，在聊天页上下文执行）。
+# 选择器与 selectors.py 的 SELECTOR_CONVERSATION_ITEM / SELECTOR_UNREAD_BADGE
+# 保持同步（JS 字符串内不便引用 Python 常量）。
+# 产出：仅含未读角标会话的 [{name}]（预览文本不在此取——预览可能是本店回复的
+# 平台译文，无法据其判定方向，方向复核在 Python 侧逐卡打开后进行）。
+_UNREAD_CARDS_JS = """
 () => {
-  const TAGS = new Set(['未回复', '已回复', '人工', '置顶']);
   const cards = Array.from(
     document.querySelectorAll('[data-testid="chat.chatroom.conversation_card"]')
   );
@@ -84,15 +84,32 @@ _CONVERSATION_SNAPSHOT_JS = """
     const name = nameEl ? (nameEl.innerText || '').trim() : '';
     if (!name) continue;
     if (!c.querySelector('.p-badge')) continue;
-    const lines = (c.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
-    const content = lines
-      .filter(l => l !== name && !TAGS.has(l) && !/^\\d+$/.test(l))
-      .pop() || '';
-    out.push({name: name, content: content});
+    out.push({name: name});
   }
   return out;
 }
 """
+
+# 最后一条气泡读取 JS：取消息流末行，判定方向并抽取文本（气泡内首个 <pre> 为
+# 原文，其余为平台译文块；系统提示行无气泡，self/other 均为 false）。
+_LAST_BUBBLE_JS = """
+() => {
+  const lists = Array.from(document.querySelectorAll('div')).filter(el =>
+    (el.className||'').toString().includes('chatd-scrollView-content'));
+  const el = lists[lists.length-1];
+  if (!el || !el.lastElementChild) return null;
+  const row = el.lastElementChild;
+  const self = !!row.querySelector('.chatd-bubble--self');
+  const other = !!row.querySelector('.chatd-bubble--other');
+  if (!other) return {self: self, text: ''};
+  const bubble = row.querySelector('.chatd-bubble--other');
+  const pre = bubble ? bubble.querySelector('pre') : null;
+  return {self: false, text: pre ? (pre.innerText || '') : ''};
+}
+"""
+
+# 打开会话后等待消息流渲染的时长（毫秒）。
+_BUBBLE_READ_WAIT_MS = 1200
 
 
 # ----------------------------------------------------------------------
@@ -486,16 +503,17 @@ class TikTokChannel:
         logger.info("TikTok 监控循环退出: shop_id=%s", self.shop_id)
 
     async def _capture_conversations(self) -> Dict[str, Any]:
-        """抓取会话列表快照（TIK-018 实测实现：未读角标驱动）。
+        """抓取会话列表快照（TIK-018 实测实现：未读角标驱动 + 方向复核）。
 
         实测 DOM 结构（2026-08-29，选择器见 ``selectors.py``）：会话卡
-        ``conversation_card`` 含买家用户名（``conversation_card_username``）、
-        未读角标（``.p-badge``）与最新消息预览文本（innerText 末行，另混有
-        「未回复/人工」等状态标签行）。
+        ``conversation_card`` 含买家用户名与未读角标（``.p-badge``）。
 
-        快照语义：**仅未读会话入快照**——买家新消息产生未读角标，而本店自己
-        发送不产生，diff 以「卡内最新消息内容」为 msg_id，天然规避「自己回复
-        又触发一轮买家消息」的自激循环；角标在发送方点击会话卡后由平台清除。
+        快照语义（两道过滤，规避自激循环）：
+        1. **仅未读会话参与**：买家新消息产生未读角标；
+        2. **方向复核**：本店回复经 CS 子账号发出后，主账号视角下**自己发送的
+           消息也会带未读角标**（实测踩坑），故逐卡打开会话读最后一条气泡方向
+           （``.chatd-bubble--self`` / ``--other``），仅买家消息入快照；打开动作
+           同时清除角标，避免重复消费。
 
         Returns:
             ``{conversation_id(买家用户名): 原始消息字典}``；页面不可用返回空映射。
@@ -503,7 +521,7 @@ class TikTokChannel:
         page = self._browser_session.page if self._browser_session else None
         if page is None:
             return {}
-        cards = await page.evaluate(_CONVERSATION_SNAPSHOT_JS)
+        cards = await page.evaluate(_UNREAD_CARDS_JS)
         if not isinstance(cards, list):
             return {}
         snapshot: Dict[str, Any] = {}
@@ -511,7 +529,22 @@ class TikTokChannel:
             if not isinstance(card, dict):
                 continue
             name = card.get("name")
-            content = card.get("content")
+            if not name:
+                continue
+            # 打开该会话（同时清除角标），读最后一条气泡的方向与文本。
+            try:
+                await page.click(f'{SELECTOR_CONVERSATION_ITEM}:has-text("{name}")')
+                await page.wait_for_timeout(_BUBBLE_READ_WAIT_MS)
+                last = await page.evaluate(_LAST_BUBBLE_JS)
+            except Exception as exc:  # noqa: BLE001 - 单卡失败不影响其余会话
+                logger.warning(
+                    "会话快照单卡读取失败（跳过）: shop_id=%s, card=%s, %s",
+                    self.shop_id, name, exc,
+                )
+                continue
+            if not isinstance(last, dict) or last.get("self"):
+                continue  # 己方消息 / 系统提示行：不触发回复
+            content = (last.get("text") or "").strip()
             if not name or not content:
                 continue
             snapshot[name] = {
