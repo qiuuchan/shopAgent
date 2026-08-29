@@ -22,7 +22,7 @@ backend.app.services.auth_service —— 认证业务服务
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -260,9 +260,9 @@ def logout(token: str) -> ApiResponse:
                 expire_at: Optional[datetime] = None
                 exp_ts = payload.get("exp")
                 if isinstance(exp_ts, (int, float)):
-                    expire_at = utc_to_beijing(datetime.utcfromtimestamp(exp_ts)).replace(
-                        tzinfo=None
-                    )
+                    expire_at = utc_to_beijing(
+                        datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+                    ).replace(tzinfo=None)
                 get_token_blacklist().revoke(jti, expire_at)
     return success_response(data=None, message="已登出")
 

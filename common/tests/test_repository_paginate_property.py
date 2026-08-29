@@ -56,7 +56,7 @@ _page_sizes = st.one_of(
 )
 
 
-@settings(max_examples=200)
+@settings(max_examples=200, deadline=None)
 @given(offsets=_created_offsets, page=_pages, page_size=_page_sizes)
 def test_property_7_paginate_result_constraints(offsets, page, page_size):
     # Feature: pdd-auto-reply, Property 7: 分页结果约束

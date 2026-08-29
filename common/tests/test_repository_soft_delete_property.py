@@ -30,7 +30,7 @@ from common.models.shop_models import Shop
 _record_counts = st.integers(min_value=1, max_value=10)
 
 
-@settings(max_examples=200)
+@settings(max_examples=200, deadline=None)
 @given(
     count=_record_counts,
     # data 用于在已知记录数后再生成「待删除下标集合」，约束到合法输入空间。

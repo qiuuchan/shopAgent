@@ -23,7 +23,7 @@ backend.app.api.routes.profile —— 个人设置接口路由
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -149,9 +149,9 @@ def _revoke_current_token(token: str) -> None:
     expire_at: Optional[datetime] = None
     exp_ts = payload.get("exp")
     if isinstance(exp_ts, (int, float)):
-        expire_at = utc_to_beijing(datetime.utcfromtimestamp(exp_ts)).replace(
-            tzinfo=None
-        )
+        expire_at = utc_to_beijing(
+            datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+        ).replace(tzinfo=None)
     get_token_blacklist().revoke(jti, expire_at)
 
 
