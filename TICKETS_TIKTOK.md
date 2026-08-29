@@ -363,6 +363,30 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 - **涉及文件**：scheduler 任务周期配置；无代码改动预期。
 - **验收**：① 观测记录（过期周期结论入档）；② cookie_refresh 周期按结论配置；③ 一次真实 login_expired → 人工重登 → 自动恢复演练。
 
+> **2026-08-29 进展：工具侧交付（三项验收均待真实环境，故未关单）**
+>
+> 原方案「无代码改动」不成立：TikTok 侧 cookie_refresh 原本纯短路（`cookies.py` 直接 `skipped: True`），
+> `pdd_task_run_log` 恒 success，**观测不到任何过期**；且登录态不入库、无「登录生效时刻」字段，
+> 仅有告警记录时只有「已过期」时间点，推不出「登录 → 过期」时长。故补上主动巡检打点：
+>
+> 1. 新增 `websocket/channel_tiktok/login_probe.py`（纯逻辑可注入）+ `TikTokChannel.probe_login_state()`：
+>    只读探测登录态（无页面 / 页面死亡 / 主站过期 / IM 过期 / 正常），**只判定不处置**
+>    （不置状态、不发告警、不重开页面，避免巡检干扰主链路）；
+> 2. `cookies.py` TikTok 分支改为巡检触发点，结果随 `data.login_probe` 回传，恒 success、
+>    不改变任务成败语义；
+> 3. `scheduler` 把巡检异常明细追加进 `task_run_log.message`，串起「何时仍正常 / 何时已失效」时间线；
+> 4. 新增 `tools/tiktok_acceptance/login_expiry.py` 观测 CLI：统计 `login_expired` 事件间隔 →
+>    推算建议巡检周期（`最短间隔 / 4`，夹 [600s, 6h]）+ 核对巡检覆盖率与巡检异常打点条数。
+>
+> **周期决策：维持 600 秒不动。** `cookie_refresh` 是 PDD / TikTok 共用任务，调大周期会同步降低
+> PDD 侧 Cookie 保活频率，违反「对 PDD 零行为变更」；且 10 分钟巡检对「天」量级的过期周期本就
+> 绰绰有余。调参决策规则（含 PDD 耦合约束与「什么情况下才该调」）见
+> `tools/tiktok_acceptance/README.md` §6.4。
+>
+> **待执行**：① 观测期每 3~7 天跑一次观测 CLI 并 `--json` 归档（≥3 次过期事件才出周期结论，
+> 且须复核巡检覆盖率 ≥80%）；③ 按 README §6.5 演练清单做一次真实 `login_expired` → 人工重登 →
+> 自动恢复演练（验证 login_recovery 60s×10 次探测的接管表现）并回填归档模板。两项完成后本单关单。
+
 ---
 
 ## 批次 F（Phase 3——真实店铺灰度 + 回复率监控，2026-08-29 立项）
