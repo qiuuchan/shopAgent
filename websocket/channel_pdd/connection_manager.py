@@ -37,6 +37,7 @@ from common.db.repository import Repository
 from common.db.session import session_scope
 from common.models.shop_models import Shop
 from engine.alert_dedup import build_alert_notifier, get_alert_dedup
+from engine.alert_forwarder import backend_alert_send_cb
 from engine.message_consumer import MessageConsumer, build_notifier
 
 logger = logging.getLogger("channel_pdd.connection_manager")
@@ -203,10 +204,11 @@ def create_channel(
         queue = message_queue_manager.get_or_create(f"{user_id}:{shop_id}")
 
         # 连接断开 / 登录失效告警通知器（复用全局去重单例，与 PDD 分支同款语义）。
+        # TIK-018：send_cb 经内部接口转发 backend 推送企微等渠道（原 None 仅日志占位）。
         event_notifier = build_alert_notifier(
             get_alert_dedup(),
             shop_pk,
-            send_cb=None,
+            send_cb=backend_alert_send_cb,
         )
 
         # 消息消费回调：原始报文交消费器处理（handler(raw, shop_id, user_id) 签名
@@ -241,12 +243,13 @@ def create_channel(
     queue = message_queue_manager.get_or_create(f"{user_id}:{shop_id}")
 
     # TIK-005：注入「连接断开告警」事件通知器。复用全局去重单例，按 shop_pk 维度
-    # 防抖（默认 30 分钟静默）。Webhook 地址暂未提供，send_cb 缺省为 None，仅日志
-    # 占位；事件类型为 connection_disconnected，与 cookies 刷新失败链路共用同一定义。
+    # 防抖（默认 30 分钟静默）。事件类型为 connection_disconnected，与 cookies
+    # 刷新失败链路共用同一定义。
+    # TIK-018：send_cb 经内部接口转发 backend 推送企微等渠道（原 None 仅日志占位）。
     event_notifier = build_alert_notifier(
         get_alert_dedup(),
         shop_pk,
-        send_cb=None,
+        send_cb=backend_alert_send_cb,
     )
 
     channel = PDDChannel(

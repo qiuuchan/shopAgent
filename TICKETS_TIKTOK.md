@@ -274,7 +274,13 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 
 ### TIK-018 测试店端到端验收（周末窗口实测）
 
-- **状态**：`[ ]` 待周末窗口实测｜**验收工具已备（2026-08-28）**：`tools/tiktok_acceptance/`（对账 CLI `reconcile.py` + 首响统计纯函数 `latency.py` + 验收演练手册 `README.md`，含 5 项验收逐条步骤与告警演练清单；配套测试 `tools/tests/` 16 个全绿）。验收 5 项步骤详见该 README。
+- **状态**：`[ ]` 进行中（2026-08-29 实测首日：验收 3/4/5 可自动化部分执行中，验收 1/2 需真实买家消息）｜**验收工具已备（2026-08-28）**：`tools/tiktok_acceptance/`（对账 CLI `reconcile.py` + 首响统计纯函数 `latency.py` + 验收演练手册 `README.md`，含 5 项验收逐条步骤与告警演练清单；配套测试 `tools/tests/` 16 个全绿）。验收 5 项步骤详见该 README。
+- **实测发现与修复（2026-08-29）**：
+  1. **店铺 oec_seller_id 失效**：库中 `shop_id=18023103936` 已不是当前卖家后台真实 ID（实测当前为 `7494494994748966018`，经主页「客户消息」导航进入聊天页从 URL 取得），以旧 ID 直连聊天页会弹「Your login has expired」模态（与登录态无关）。已修正库值。
+  2. **IM 会话过期弹窗检测盲区**：主站登录态有效时 IM 会话过期以 `.p-modal` 弹窗呈现，URL 不跳转，原 `page.url` 检测覆盖不到。已补 `_is_im_login_expired()`（`selectors.py` 新增 `IM_EXPIRED_MODAL_MARKERS`）+ 测试。
+  3. **浏览器死亡无感知**：快照抓取为纯逻辑桩不触碰页面时，杀浏览器无任何告警。已补监控循环每轮 `_check_page_alive()` 最小存活探测（evaluate 失败 → `connection_disconnected`）+ 测试。实测杀浏览器后 **4 秒内**告警。
+  4. **告警服务间链路缺失**：`build_alert_notifier` 的 `send_cb` 恒为 `None`（仅日志占位），告警到不了企微。已补：backend 新增内部接口 `POST /api/v1/internal/notify-events`（X-Internal-Token 鉴权，转交 `push_system_event`，`operator_id=None` 系统内部调用）；websocket 新增 `engine/alert_forwarder.py`（`backend_alert_send_cb`，fire-and-forget 线程池转发）并注入 PDD/TikTok/cookie 刷新三处调用点。实测杀浏览器后 `pdd_notify_record` 落库 success（企微 errcode 校验真实送达）。
+  5. websocket 301 / backend 237 用例全绿（各含新增用例）。
 - **批次**：D1 ｜ **依赖**：TIK-014 ~ TIK-017 全部 ｜ **预估**：1 人日 + 周末窗口实测
 - **说明**：Phase 1 出口验收，对齐 PLAN §10「关键验收」与 §1 出口标准。
 - **需要用户配合**：测试店账号、企微群（收告警）。

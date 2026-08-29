@@ -17,8 +17,10 @@ channel_tiktok.tiktok_channel —— TikTok 店铺通道主循环（监控 + 登
   消息 → ``ReplyDebouncer`` 去抖 → 到期消息转原始报文入 FIFO 队列（复用
   ``common.utils.message_queue`` 与 ``message_handler`` 回调约定）。
 - **登录失效检测 + 恢复探测**（Phase 2 保活）：``page.url`` 命中 ``LOGIN_PAGE_MARKERS``
+  或聊天页出现 IM 会话过期弹窗（``IM_EXPIRED_MODAL_MARKERS``，TIK-018 实测补充）
   → 置状态 + 触发 ``login_expired`` 告警，随后周期探测登录态恢复（人工重登后自动
-  续接监控，超时未恢复才停循环）；快照抓取异常视为 ``connection_disconnected``。
+  续接监控，超时未恢复才停循环）；快照抓取异常与页面存活探测失败（浏览器退出 /
+  崩溃）视为 ``connection_disconnected``。
 - **告警去重**：``event_notifier`` 为 ``build_alert_notifier`` 产出的闭包（绑定
   shop_pk 与去重维度），直接调用即可。
 
@@ -41,6 +43,7 @@ from channel_pdd.message_queue import FifoMessageQueue
 from channel_tiktok.browser_session import BrowserSession
 from channel_tiktok.login_recovery import wait_login_recovery
 from channel_tiktok.selectors import (
+    IM_EXPIRED_MODAL_MARKERS,
     LOGIN_PAGE_MARKERS,
     TIKTOK_CHAT_PATH,
     TIKTOK_CHAT_URL_TEMPLATE,
@@ -320,6 +323,47 @@ class TikTokChannel:
             return False
         return any(marker in url for marker in LOGIN_PAGE_MARKERS)
 
+    async def _check_page_alive(self) -> bool:
+        """页面存活探测：浏览器进程退出 / 页面崩溃时 evaluate 必抛，据此置断开。
+
+        TIK-018 实测补充：快照抓取为纯 DOM 读取之外的桩时不触碰页面，浏览器死亡
+        无法经快照异常暴露，故监控循环每轮先做最小存活探测（页面对象不存在时视为
+        存活，兼容测试桩注入）。
+        """
+        page = self._browser_session.page if self._browser_session else None
+        if page is None:
+            return True
+        try:
+            await page.evaluate("1")
+            return True
+        except Exception as exc:  # noqa: BLE001 - 浏览器已死/页面失效按断开处理
+            logger.error(
+                "页面存活探测失败（视为连接断开）: shop_id=%s, %s", self.shop_id, exc
+            )
+            return False
+
+    async def _is_im_login_expired(self) -> bool:
+        """检测 IM 子系统会话过期弹窗（主站登录态有效时仍可能出现）。
+
+        TIK-018 实测：聊天页 URL 不跳转，IM 会话过期以 ``.p-modal`` 弹窗呈现
+        （「Your login has expired」）。探测异常一律返回 False（不误报），死亡
+        浏览器由 ``_check_page_alive`` 兜底。
+        """
+        page = self._browser_session.page if self._browser_session else None
+        if page is None:
+            return False
+        try:
+            text = await page.evaluate(
+                "() => { const m = document.querySelector('.p-modal');"
+                " return m ? (m.innerText || '') : ''; }"
+            )
+        except Exception:  # noqa: BLE001 - 探测失败不误报
+            return False
+        if not isinstance(text, str):
+            return False
+        lowered = text.lower()
+        return any(marker.lower() in lowered for marker in IM_EXPIRED_MODAL_MARKERS)
+
     # ------------------------------------------------------------------
     # 事件告警（经 AlertDedup 链路，复用 TIK-005 组件）
     # ------------------------------------------------------------------
@@ -369,8 +413,12 @@ class TikTokChannel:
         logger.info("TikTok 监控循环启动: shop_id=%s", self.shop_id)
         old: Dict[str, Any] = {}
         while not self._is_stopped():
-            # 登录失效检测优先于快照抓取。
-            if self._is_login_expired():
+            # 页面存活探测优先：浏览器进程退出 / 页面崩溃在此暴露并断开告警。
+            if not await self._check_page_alive():
+                self._on_connection_disconnected("页面存活探测失败（浏览器退出或页面失效）")
+                break
+            # 登录失效检测优先于快照抓取（URL 跳登录页 或 IM 会话过期弹窗）。
+            if self._is_login_expired() or await self._is_im_login_expired():
                 self._on_login_expired()
                 # Phase 2 保活：失效后周期探测登录态恢复，超时未恢复才退出监控循环。
                 recovered = await self._probe_login_recovery()

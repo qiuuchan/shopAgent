@@ -32,11 +32,13 @@ from channel_pdd.message_queue import FifoMessageQueue
 
 @pytest.fixture
 def fake_browser():
-    """最小假浏览器会话：page.url 可注入，goto/start/close 为协程桩。"""
+    """最小假浏览器会话：page.url 可注入，goto/evaluate 为协程桩。"""
     browser = AsyncMock()
     page = MagicMock()
     page.url = "https://seller.tiktokshopglobalselling.com/chat/inbox/current"
     page.goto = AsyncMock()
+    # 存活探测 / IM 弹窗探测（TIK-018）：默认页面存活、无过期弹窗。
+    page.evaluate = AsyncMock(return_value=1)
     browser.page = page
     return browser
 
@@ -284,6 +286,73 @@ def test_connection_disconnected_on_snapshot_error(monkeypatch, fake_browser, in
     asyncio.run(_run())
     event_types = [c.args[0] for c in notifier.call_args_list]
     assert "connection_disconnected" in event_types
+
+
+def test_connection_disconnected_on_page_death(monkeypatch, fake_browser, in_hours):
+    """页面存活探测失败（浏览器进程退出/页面崩溃）→ connection_disconnected 并停循环。
+
+    TIK-018 实测补充：快照抓取为纯逻辑桩不触碰页面时，浏览器死亡只能经存活探测
+    暴露（evaluate 必抛）。
+    """
+    notifier = MagicMock()
+    queue: FifoMessageQueue = FifoMessageQueue(name="test:6b")
+    ch = TikTokChannel(
+        shop_id="t6b",
+        user_id=6,
+        shop_pk=6,
+        message_queue=queue,
+        message_handler=AsyncMock(),
+        browser_session=fake_browser,
+        event_notifier=notifier,
+        poll_interval=0.01,
+    )
+    # 模拟浏览器死亡：任何 evaluate 都抛「Target closed」类异常。
+    fake_browser.page.evaluate = AsyncMock(side_effect=RuntimeError("Target page closed"))
+
+    async def _run():
+        await ch.start()
+        await asyncio.sleep(0.05)
+        await ch.stop()
+
+    asyncio.run(_run())
+    event_types = [c.args[0] for c in notifier.call_args_list]
+    assert "connection_disconnected" in event_types
+    assert ch.get_connection_status()["state"] == "disconnected"
+
+
+def test_im_modal_expiry_triggers_login_expired(monkeypatch, fake_browser, in_hours):
+    """IM 会话过期弹窗（URL 不跳转）→ 触发 login_expired 告警。
+
+    TIK-018 实测：主站登录态有效时 IM 会话过期以 .p-modal 弹窗呈现，URL 检测
+    无法覆盖，需经 evaluate 读弹窗文本判定。
+    """
+    notifier = MagicMock()
+    queue: FifoMessageQueue = FifoMessageQueue(name="test:5c")
+    ch = TikTokChannel(
+        shop_id="t5c",
+        user_id=5,
+        shop_pk=5,
+        message_queue=queue,
+        message_handler=AsyncMock(),
+        browser_session=fake_browser,
+        event_notifier=notifier,
+        poll_interval=0.01,
+        login_recovery_max_tries=0,
+    )
+    # 聊天页 URL 正常，但弹窗文本命中过期标记。
+    fake_browser.page.evaluate = AsyncMock(
+        return_value="Your login has expired, please log in again\nLog in"
+    )
+
+    async def _run():
+        await ch.start()
+        await asyncio.sleep(0.05)
+        await ch.stop()
+
+    asyncio.run(_run())
+    event_types = [c.args[0] for c in notifier.call_args_list]
+    assert "login_expired" in event_types
+    assert ch.get_connection_status()["state"] == "disconnected"
 
 
 # ----------------------------------------------------------------------

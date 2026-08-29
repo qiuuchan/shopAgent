@@ -61,6 +61,17 @@ LOGIN_PAGE_MARKERS: tuple[str, ...] = (
     TIKTOK_LOGIN_PATH,  # "/account/login"
 )
 
+# IM 会话过期弹窗标记（TIK-018 实测补充，2026-08-29）：
+# 主站登录态有效时，IM 子系统会话过期在聊天页以 .p-modal 弹窗呈现（URL 不跳转），
+# 文案「Your login has expired, please log in again」（URL 模板固定 lang=en）。
+# 探测取 .p-modal 的 innerText 做包含匹配（大小写不敏感），故以短语而非整句为准。
+# 同步发现：以过期/错误的 oec_seller_id 直连聊天页也会出现同款弹窗——出现该弹窗时
+# 应同时核对店铺 oec_seller_id 是否与当前卖家后台一致。
+IM_EXPIRED_MODAL_SELECTOR: str = ".p-modal"
+IM_EXPIRED_MODAL_MARKERS: tuple[str, ...] = (
+    "login has expired",  # "Your login has expired, please log in again"
+)
+
 
 # ----------------------------------------------------------------------
 # 聊天页入口 / 会话结构选择器（以 spike selectors.md 为唯一事实来源）

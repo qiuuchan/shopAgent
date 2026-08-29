@@ -32,6 +32,7 @@ from channel_pdd.core.credential_store import (
 )
 from common.schemas.common import ApiResponse, error_response, success_response
 from engine.alert_dedup import build_alert_notifier, get_alert_dedup
+from engine.alert_forwarder import backend_alert_send_cb
 
 logger = logging.getLogger("websocket.routes.cookies")
 
@@ -54,7 +55,8 @@ def _alert_cookie_refresh_failed(shop_pk: int, shop_id: str, reason: str) -> Non
         reason: 失败原因（仅用于日志 / 占位内容）。
     """
     try:
-        notifier = build_alert_notifier(get_alert_dedup(), shop_pk, send_cb=None)
+        # TIK-018：告警经内部接口转发 backend 推送企微等渠道。
+        notifier = build_alert_notifier(get_alert_dedup(), shop_pk, send_cb=backend_alert_send_cb)
         notifier(
             _EVENT_COOKIE_REFRESH_FAILED,
             f"店铺 shop_id={shop_id} Cookie 刷新失败：{reason}",

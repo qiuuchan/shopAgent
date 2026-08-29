@@ -26,6 +26,7 @@ from app.api.routes import (
     dashboard,
     feedback,
     internal_chat,
+    internal_notify,
     keywords,
     knowledge,
     logs,
@@ -99,6 +100,9 @@ api_router.include_router(chat_ws.router)
 
 # 在线聊天内部事件接收（websocket 服务回调，密钥鉴权，需求 14）。
 api_router.include_router(internal_chat.router)
+
+# 系统事件通知内部接收（websocket 告警回调，密钥鉴权，需求 18.3，TIK-018 补链路）。
+api_router.include_router(internal_notify.router)
 
 # 会话订单/商品上下文接口：记录与展示（需求 17）。
 api_router.include_router(chat_context.router)
