@@ -9,7 +9,9 @@
 | --- | --- |
 | `latency.py` | 首响时长统计纯函数（不依赖 common，可单测）：回复周期切分、>300s 超时判定 |
 | `reconcile.py` | 对账 CLI：按店铺 + 时间窗口统计收发消息与首响时长，供与 seller center 人工对账 |
-| `tests/`（`../tests/`） | 纯函数单测 + SQLite 内存库集成测试（16 个） |
+| `risk_rule_drill.py` | 风控频率断路器配置演练 CLI（TIK-020）：真实库配规则 + 真实决策链驱动，验证超限暂停与风控日志落库，配置指引见 [RISK_RULE_GUIDE.md](../../RISK_RULE_GUIDE.md) |
+| `login_expiry.py` | 登录态过期观测 CLI（TIK-023）：统计 `login_expired` 事件间隔、推算建议巡检周期、核对巡检覆盖率 |
+| `tests/`（`../tests/`） | 纯函数单测 + SQLite 内存库集成测试（16 个 + TIK-020/TIK-023 新增） |
 
 ## 2. 运行方式
 
@@ -32,6 +34,21 @@
 - 时间口径：`msg_time` 统一北京时间（规范 17），`--since/--until` 按北京时间解析，不做时区换算。
 
 自测：`cd tools && ../.venv/Scripts/python -m pytest tests/ -q`
+
+风控演练（TIK-020，需真实 MySQL 且店铺处于营业时间内）：
+
+```bash
+./.venv/Scripts/python tools/tiktok_acceptance/risk_rule_drill.py --shop-pk 1
+```
+
+登录态过期周期观测（TIK-023，默认拉最近 30 天）：
+
+```bash
+./.venv/Scripts/python tools/tiktok_acceptance/login_expiry.py --shop 3
+./.venv/Scripts/python tools/tiktok_acceptance/login_expiry.py --shop 3 --days 14 --json
+./.venv/Scripts/python tools/tiktok_acceptance/login_expiry.py --shop 3 \
+    --since 2026-08-29T00:00:00 --until 2026-09-12T23:59:59
+```
 
 ## 3. 验收前置条件（周末窗口实测前确认）
 
@@ -111,3 +128,109 @@
 - **告警没收到**：查 `pdd_notify_record` 是否落库（落库 success 未达企微 = 渠道配置/网络问题，复查 webhook key 是否失效——企微对失效 key 返回 errcode≠0，系统按业务错误记 failed；未落库 = 事件未触发，检查通道状态与 AlertDedup 静默窗口）；
 - **`--db` sqlite 验证**：sqlite 下 BigInteger 不自增，需先用 `tools/tests/conftest.py` 的方言适配建表再插数；
 - **周末窗口对账**：验收 1/2 建议用 `--json` 输出留存，作为验收记录附件。
+- **巡检打点全是 `channel_absent`**：该取值表示「无活跃页面」（店铺未连接或在营业时间窗外），属正常期望态而非故障；若确认店铺应在线却长期 `channel_absent`，查通道是否真的启动（websocket 状态接口）以及营业时间 weekdays 配置，详见 §6.1。
+
+## 6. TIK-023 登录态过期周期观测
+
+> 工单：[TICKETS_TIKTOK.md](../../TICKETS_TIKTOK.md) TIK-023（批次 E2）｜验收：① 观测记录入档；② cookie_refresh 周期按结论配置；③ 一次真实 `login_expired` → 人工重登 → 自动恢复演练。
+
+### 6.1 观测原理：数据从哪来
+
+TikTok 登录态常驻浏览器 user-data-dir（`websocket_browser_data/tiktok_<shop_pk>`），**不入库、也没有任何「登录生效时刻」字段**，因此光看告警记录只有「已过期」的时间点，推不出「登录 → 过期」的时长。TIK-023 补上两个数据源：
+
+| 数据源 | 落库位置 | 提供什么 |
+| --- | --- | --- |
+| 登录态巡检打点 | `pdd_task_run_log`（`task_key='cookie_refresh'`） | 每周期对 TikTok 店铺做一次**只读**登录态探测，异常时把明细追加进 message（`店铺[xx] 巡检异常：中文说明`） |
+| 过期告警事件 | `pdd_notify_record`（`event_type='login_expired'`） | 过期发生的时间点，相邻间隔即周期样本 |
+
+巡检链路：`scheduler.run_cookie_refresh` → HTTP → `websocket POST /api/v1/cookies/refresh` → TikTok 分支跳过 PDD 刷新、改为调 `TikTokChannel.probe_login_state()`（与监控循环同口径，但**只判定不处置**：不置状态、不发告警、不重开页面）→ 结果随 `data.login_probe` 回传。
+
+`login_probe` 取值（服务间契约，改动须同步 websocket 与 scheduler 两侧）：
+
+| 取值 | 含义 | 是否记入执行日志 |
+| --- | --- | --- |
+| `ok` | 登录态有效 | 否（常态不打点，避免刷屏） |
+| `login_expired` | 主站跳登录页 | 是 |
+| `im_expired` | IM 会话过期弹窗（主站未跳转） | 是 |
+| `page_dead` | 页面存活探测失败（浏览器已退出） | 是 |
+| `channel_absent` | 无活跃页面（未连接 / 营业时间窗外），**非故障** | 是 |
+| `unknown` | 探测异常，不误报 | 是 |
+
+### 6.2 观测跑法与频率
+
+- **观测期**：数日 ~ 数周（TikTok 登录态过期周期未知，短窗口取不到样本）；
+- **跑法**：观测期内每 3~7 天跑一次本 CLI 跟进，收尾时用 `--since/--until` 一次性拉全窗口；
+- **留存**：每次用 `--json` 输出归档，作为验收①的观测记录附件；
+- **当前巡检周期**：`cookie_refresh` = **600 秒**（10 分钟），观测期内维持不动。
+
+### 6.3 结论判读与口径限制
+
+读报告时务必带上这三条限制，否则结论会偏乐观：
+
+1. **告警次数可能少于真实发生次数**：`AlertDedup` 静默窗口（默认 30 分钟）会压制重复告警，据此算出的过期间隔是**上界**而非精确值；
+2. **样本 <3 次过期事件不出周期结论**（即 <2 个间隔），CLI 只给保守建议值 1800 秒；
+3. **巡检覆盖率 <80% 时结论不可信**：说明窗口不完整（服务重启 / 调度未启用 / misfire 丢弃），需补齐观测再下结论。
+
+交叉校验：报告里的「巡检异常打点条数」× 巡检周期 ≈ 累计失效时长；该数通常**多于**告警事件数（告警受静默去重压制），若反而少于，需核查告警链路。
+
+### 6.4 cookie_refresh 周期调参规则
+
+**建议周期算法**（CLI 已实现，见 `login_expiry.suggest_probe_interval`）：
+
+```
+建议周期 = clamp(ceil_to_minute(最短观测间隔 / 4), 下界 600s, 上界 21600s)
+```
+
+除以 4 是为最短间隔留出采样冗余，避免巡检与过期整周期错配而漏采。
+
+**⚠ 调参前必读：cookie_refresh 是 PDD / TikTok 共用任务**
+
+`run_cookie_refresh` 遍历全部启用店铺，周期对两个平台同时生效。调大周期会**同步降低 PDD 侧 Cookie 保活频率**，违反「对 PDD 现有路径零行为变更」的出口准则。因此决策规则如下：
+
+| 观测结论 | 处置 |
+| --- | --- |
+| 无过期事件 / 样本不足（<3 次） | **不动**，维持 600 秒 |
+| 最短间隔 ≤ 40 分钟（建议值算出 ≤600s） | **不动**：已触及下界，再密无收益 |
+| 建议值 > 600 秒 | **需权衡**：先确认 PDD 侧可接受该保活频率；若不可接受则**维持 600 秒不动**（10 分钟巡检对「天」量级的过期周期本就绰绰有余） |
+
+**改法**（改完需重启 scheduler 或等下次调度重载）：
+
+```bash
+# 方式一：管理端 /admin/scheduled-tasks 改 cookie_refresh 的调度配置（秒）
+# 方式二：直改库（注意：backend 内置任务种子仅在 task_key 不存在时补齐，不会覆盖已有配置）
+UPDATE pdd_scheduled_task SET schedule_config = '1800' WHERE task_key = 'cookie_refresh';
+```
+
+### 6.5 恢复演练清单（验收③）
+
+演练 `login_expired` → 人工重登 → `login_recovery` 自动接管（默认 60s × 10 次探测，共 10 分钟窗口）。**需人工配合，择机执行**。
+
+**步骤**：
+
+1. 确认测试店在线、企微可收告警，记下当前时刻 T0；
+2. 停 websocket 服务，把 user-data-dir 改名（`websocket_browser_data/tiktok_<shop_pk>` → `.bak`），重启服务；
+3. 预期 T0 后 1 个监控周期内：企微收到 `login_expired` 告警，通道置 `DISCONNECTED`；
+4. **不要立刻重登**：等待 2~3 分钟，确认监控循环进入恢复探测（`login_recovery` 每 60s 探一次），且**无重复告警轰炸**（静默窗口 30 分钟）；
+5. 人工在浏览器窗口重登（过验证码），完成后**不做任何系统操作**；
+6. 预期：下一个 60s 探测点检测到登录态恢复 → 自动重开聊天页 → 续接监控，通道回到连接态；
+7. 用买家账号发一条消息，确认自动回复恢复（首响 ≤300s）；
+8. 复核落库与日志：
+   ```bash
+   ./.venv/Scripts/python tools/tiktok_acceptance/login_expiry.py --shop <pk> \
+       --since <T0> --until <T0+1h> --json
+   ./.venv/Scripts/python tools/tiktok_acceptance/reconcile.py --shop <pk> --since <T0>
+   ```
+
+**通过判定**：① `login_expired` 告警 1 分钟内到达企微且 `notify_record` 落库成功；② 静默窗口内无重复告警；③ 人工重登后 60~120 秒内通道自动恢复连接、无需重启服务；④ 恢复后消息自动回复正常。
+
+**归档模板**（演练后回填，作为验收③记录）：
+
+```
+演练日期/时刻：
+店铺 shop_pk / shop_id：
+T0（置故障）／T1（告警到达企微）／T2（人工重登完成）／T3（通道自动恢复）：
+告警延迟 T1-T0：      静默窗口内重复告警条数：
+自动恢复耗时 T3-T2：   恢复后首响：
+login_recovery 是否接管（是/否）：  恢复后是否需人工重启服务（是/否）：
+结论（通过/不通过）：  偏差说明：
+```
