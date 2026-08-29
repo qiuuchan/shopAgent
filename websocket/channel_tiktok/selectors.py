@@ -107,16 +107,32 @@ SELECTOR_LOGIN_CODE_INPUT: str = "#TikTok_Ads_SSO_Login_Code_Input"
 # 登录表单错误提示的宽松选择器（页面出现可见错误信息时提前终止等待）。
 SELECTOR_LOGIN_ERROR_HINT: str = ".error-msg, .error_message, .arco-message-error"
 
+# ----------------------------------------------------------------------
+# 聊天页结构选择器（TIK-018 真实会话实测回填，2026-08-29）
+# ----------------------------------------------------------------------
+# 实测环境：测试店 FunToy Lab（shop_pk=1）真实买家会话在场（买家 ddy39s 发送
+# 「测试」文本），Headless Chromium + 持久化登录态直连聊天页抓取 DOM。
+# 关键结论：聊天页结构优先用平台官方 **data-testid** 与 **chatd-** 设计系统类名
+# （稳定语义命名），勿用混淆哈希类（如 ioMpTL0xxU96sYTv8RyU，构建即变）。
 
-
-# 以下选择器尚未测绘（空店无活跃会话时不渲染），仅声明占位语义，供 TIK-012 引用时
-# 明确「待补测」边界，避免提前写成臆测选择器：
-#   SELECTOR_CONVERSATION_ITEM：会话列表条目
-#   SELECTOR_MESSAGE_INPUT：消息输入框
-#   SELECTOR_SEND_BUTTON：发送按钮
-#   SELECTOR_MESSAGE_LIST：消息流容器
-#   SELECTOR_MY_MESSAGE_BUBBLE：己方消息气泡
-# 正式取值待 TIK-012 阶段以真实会话重跑 spike s2 后回填本文件。
+# 会话列表容器（左侧收件箱）。
+SELECTOR_CONVERSATION_LIST: str = '[data-testid="chat.chatroom.conversation_list"]'
+# 会话条目（每个买家会话一张卡；未读时卡内含 .p-badge 未读角标，文本末行 = 最新
+# 消息预览，另含「未回复/人工」等状态标签行需在解析时剔除）。
+SELECTOR_CONVERSATION_ITEM: str = '[data-testid="chat.chatroom.conversation_card"]'
+# 会话条目内买家用户名（发送时按用户名定位目标会话卡）。
+SELECTOR_CONVERSATION_ITEM_USERNAME: str = (
+    '[data-testid="chat.chatroom.conversation_card_username"]'
+)
+# 消息流容器（右侧会话面板的滚动内容区；子节点为逐条消息卡）。
+SELECTOR_MESSAGE_LIST: str = ".chatd-scrollView-content"
+# 己方消息气泡（发送成功检测目标；买家气泡为 .chatd-bubble--other）。
+SELECTOR_MY_MESSAGE_BUBBLE: str = ".chatd-bubble--self"
+# 消息输入框（右侧面板主输入 textarea；页内仅主输入带 placeholder 属性，
+# 文案随界面语言漂移故只按属性存在性匹配）。
+SELECTOR_MESSAGE_INPUT: str = "textarea[placeholder]"
+# 发送按钮（主按钮样式 + 文案「发送」；界面语言固定中文实测）。
+SELECTOR_SEND_BUTTON: str = '.p-btn-primary:has-text("发送")'
 
 
 __all__ = [
@@ -126,9 +142,18 @@ __all__ = [
     "TIKTOK_CHAT_PATH",
     "TIKTOK_CHAT_URL_TEMPLATE",
     "LOGIN_PAGE_MARKERS",
+    "IM_EXPIRED_MODAL_SELECTOR",
+    "IM_EXPIRED_MODAL_MARKERS",
     "SELECTOR_CHAT_NAV",
     "SELECTOR_IM_BUTTON",
     "SELECTOR_UNREAD_BADGE",
+    "SELECTOR_CONVERSATION_LIST",
+    "SELECTOR_CONVERSATION_ITEM",
+    "SELECTOR_CONVERSATION_ITEM_USERNAME",
+    "SELECTOR_MESSAGE_LIST",
+    "SELECTOR_MY_MESSAGE_BUBBLE",
+    "SELECTOR_MESSAGE_INPUT",
+    "SELECTOR_SEND_BUTTON",
     "SELECTOR_LOGIN_MOBILE_INPUT",
     "SELECTOR_LOGIN_PASSWORD_INPUT",
     "SELECTOR_LOGIN_SUBMIT_BUTTON",

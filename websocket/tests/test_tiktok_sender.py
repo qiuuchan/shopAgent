@@ -34,9 +34,25 @@ class FakePage:
         self.calls: List[str] = []
         self.bubble_appears = bubble_appears
         self.wait_raise = wait_raise  # 若 True，wait_for_selector 抛超时异常
+        # 既有己方气泡数（count 桩，模拟会话历史气泡；TIK-018 增量检测）。
+        self.existing_bubbles = 0
 
     async def click(self, selector: str) -> None:
         self.calls.append(f"click:{selector}")
+
+    async def count(self, selector: str) -> int:
+        self.calls.append(f"count:{selector}")
+        return self.existing_bubbles
+
+    def locator(self, selector: str) -> Any:
+        """返回带异步 count() 的假定位器（对齐真实 Page.locator(sel).count()）。"""
+        outer = self
+
+        class _FakeLocator:
+            async def count(self) -> int:
+                return await outer.count(selector)
+
+        return _FakeLocator()
 
     async def fill(self, selector: str, value: str) -> None:
         self.calls.append(f"fill:{selector}:{value}")
@@ -125,8 +141,9 @@ def test_send_text_call_sequence():
 
     assert result is not None
     assert result["success"] is True
-    # 调用序校验。
+    # 调用序校验（首个 DOM 操作为点击会话卡；随后统计既有己方气泡）。
     assert page.calls[0].startswith("click:")
+    assert any(c.startswith("count:") for c in page.calls)
     assert any(c.startswith("fill:") for c in page.calls)
     assert any(c.startswith("type:") for c in page.calls)
     assert any(c.startswith("wait:") for c in page.calls)
@@ -181,24 +198,29 @@ def test_default_send_interval_constants():
     assert DEFAULT_MAX_SEND_INTERVAL_SECONDS == 120.0
 
 
-def test_send_interval_applied_on_dom_send():
-    """发送前应用最小随机间隔：asyncio.sleep 被调用一次（采样值落在区间内）。"""
+def test_send_interval_applied_before_bridge():
+    """发送前应用最小随机间隔：同步 sleep 被调用一次（采样值落在区间内）。
+
+    TIK-018 实测修正：节流移至桥接之前（桥接等待超时仅 15s，协程内 sleep
+    45-120s 必然超时误判），故 sleep 为同步调用。
+    """
     page = FakePage(bubble_appears=True)
-    sender = _make_sender(page, min_send_interval=0.01, max_send_interval=0.02)
+    loop = FakeLoop()
+    sender = _make_sender(page, loop=loop, min_send_interval=0.01, max_send_interval=0.02)
 
     sleep_calls: List[float] = []
 
-    async def _fake_sleep(seconds: float) -> None:
-        sleep_calls.append(seconds)
-
-    with mock.patch("channel_tiktok.tiktok_sender.asyncio.sleep", _fake_sleep):
-        async def _run():
-            return await sender._dom_send_text("u_1", "间隔")
-
-        result = asyncio.run(_run())
+    with mock.patch(
+        "channel_tiktok.tiktok_sender.time.sleep",
+        side_effect=sleep_calls.append,
+    ), mock.patch(
+        "channel_tiktok.tiktok_sender.asyncio.run_coroutine_threadsafe",
+        side_effect=loop.run_coroutine_threadsafe,
+    ):
+        result = sender.send_text("u_1", "间隔")
 
     assert result is not None
-    # sleep 恰好调用一次（发送前的间隔等待），且采样值在 [0.01, 0.02] 内。
+    # sleep 恰好调用一次（桥接前的节流等待），且采样值在 [0.01, 0.02] 内。
     assert len(sleep_calls) == 1
     assert 0.01 <= sleep_calls[0] <= 0.02
 
@@ -206,16 +228,17 @@ def test_send_interval_applied_on_dom_send():
 def test_send_interval_disabled_when_max_non_positive():
     """间隔上限 ≤ 0 时跳过 sleep（测试 / 关闭场景）。"""
     page = FakePage(bubble_appears=True)
-    sender = _make_sender(page, min_send_interval=0.0, max_send_interval=0.0)
+    loop = FakeLoop()
+    sender = _make_sender(page, loop=loop, min_send_interval=0.0, max_send_interval=0.0)
 
-    with mock.patch("channel_tiktok.tiktok_sender.asyncio.sleep") as fake_sleep:
-        async def _run():
-            return await sender._dom_send_text("u_1", "无间隔")
-
-        result = asyncio.run(_run())
+    with mock.patch("channel_tiktok.tiktok_sender.time.sleep") as fake_sleep, mock.patch(
+        "channel_tiktok.tiktok_sender.asyncio.run_coroutine_threadsafe",
+        side_effect=loop.run_coroutine_threadsafe,
+    ):
+        result = sender.send_text("u_1", "无间隔")
 
     assert result is not None
-    fake_sleep.assert_not_awaited()
+    fake_sleep.assert_not_called()
 
 
 # ----------------------------------------------------------------------

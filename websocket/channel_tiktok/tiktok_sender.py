@@ -15,9 +15,11 @@ channel_tiktok.tiktok_sender —— TikTok 消息 DOM 发送器
   操作相互干扰（PLAN §9 风险 5）。
 - 成功检测：发送后检测「消息流出现己方气泡」（选择器引用 ``selectors.py``，未实测部分
   以 TODO(TIK-018 实测) 标注，见文件内常量），超时（默认 15s）视为失败返回 None。
-- 发送最小随机间隔（频率断路器，PLAN §7）：每次发送前在主循环侧 sleep 一个
-  ``[min, max]`` 区间内的随机间隔（默认 45-120s），模拟人工回复节奏、降低相邻发送
-  过于密集触发平台风控的概率；间隔可经构造参数覆盖，区间上限 ≤ 0 时关闭（测试友好）。
+- 发送最小随机间隔（频率断路器，PLAN §7）：每次发送前在 **桥接之前**（调用方
+  工作线程，同步 sleep）等待一个 ``[min, max]`` 区间内的随机间隔，模拟人工回复
+  节奏、降低相邻发送过于密集触发平台风控的概率；间隔可经构造参数覆盖，区间上限
+  ≤ 0 时关闭（测试友好）。TIK-018 实测修正：不得放在桥接协程内（桥接等待超时
+  仅 15s，45-120s 节流必然超时误判失败）。
 - ``send_image`` 显式不支持（Phase 1 返回 None）。
 
 选择器处理：会话列表项 / 输入框 / 发送按钮 / 消息流 / 己方气泡选择器在本文件以
@@ -32,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("channel_tiktok.tiktok_sender")
@@ -45,17 +48,16 @@ DEFAULT_SEND_TIMEOUT_SECONDS: float = 15.0
 DEFAULT_MIN_SEND_INTERVAL_SECONDS: float = 45.0
 DEFAULT_MAX_SEND_INTERVAL_SECONDS: float = 120.0
 
-# 选择器占位：以下选择器尚未实测（空店无活跃会话不渲染），以 TODO(TIK-018 实测) 标注，
-# 引用自 selectors.py 的待确认项。本文件仅声明占位常量，供 DOM 协程引用，正式取值
-# 待 TIK-018 真实会话补测回填 selectors.py 后生效。
-# TODO(TIK-018 实测): 回填 SELECTOR_CONVERSATION_ITEM / SELECTOR_MESSAGE_LIST /
-# TODO(TIK-018 实测): SELECTOR_MY_MESSAGE_BUBBLE / SELECTOR_MESSAGE_INPUT /
-# TODO(TIK-018 实测): SELECTOR_SEND_BUTTON 真实选择器至 selectors.py。
-SELECTOR_CONVERSATION_ITEM: str = "TODO(TIK-018 实测):conversation-item"
-SELECTOR_MESSAGE_LIST: str = "TODO(TIK-018 实测):message-list"
-SELECTOR_MY_MESSAGE_BUBBLE: str = "TODO(TIK-018 实测):my-message-bubble"
-SELECTOR_MESSAGE_INPUT: str = "TODO(TIK-018 实测):message-input"
-SELECTOR_SEND_BUTTON: str = "TODO(TIK-018 实测):send-button"
+# 选择器（TIK-018 真实会话实测回填，定义见 selectors.py「聊天页结构选择器」）。
+# 此处 re-export 供测试 / 上层引用（历史占位常量已由实测值替换）。
+from channel_tiktok.selectors import (  # noqa: F401 - re-export
+    SELECTOR_CONVERSATION_ITEM,
+    SELECTOR_CONVERSATION_ITEM_USERNAME,
+    SELECTOR_MESSAGE_INPUT,
+    SELECTOR_MESSAGE_LIST,
+    SELECTOR_MY_MESSAGE_BUBBLE,
+    SELECTOR_SEND_BUTTON,
+)
 
 
 class TikTokSender:
@@ -122,6 +124,12 @@ class TikTokSender:
             成功返回响应字典（含 ``success`` 标志）；失败 / 超时返回 None。
         """
         loop = self.main_loop or asyncio.get_event_loop()
+        # 频率断路器（PLAN §7）：发送最小随机间隔。TIK-018 实测修正：节流必须在
+        # 桥接 **之前**（同步 sleep 于调用方工作线程，不占事件循环）——原实现把
+        # sleep 放在桥接协程内，而桥接等待超时仅 send_timeout（15s），45-120s
+        # 节流必然触发超时误判失败。
+        if enforce_interval and self.max_send_interval > 0:
+            time.sleep(random.uniform(self.min_send_interval, self.max_send_interval))
         coro = self._dom_send_text(
             recipient_uid, content, enforce_interval=enforce_interval
         )
@@ -179,22 +187,24 @@ class TikTokSender:
             if page is None:
                 logger.error("TikTok 发送失败: 无可用页面 shop_id=%s", self.shop_id)
                 return None
-            # 频率断路器：发送最小随机间隔（主循环侧，与串行锁同侧，PLAN §7）。
-            # 手动发送跳过间隔（人工操作自有节奏），仅自动回复应用防风控节流。
-            if enforce_interval:
-                await self._enforce_min_send_interval()
+            # 频率断路器：已于 send_text 桥接前完成（见其注释），协程内仅做 DOM 操作。
             try:
-                # 1) 点击目标会话（按 recipient_uid 定位）。
-                await page.click(
-                    f"{SELECTOR_CONVERSATION_ITEM}[data-uid='{recipient_uid}']"
-                )
-                # 2) 输入框填入（human-like 逐字输入在 _type_humanlike 内）。
+                # 1) 点击目标会话（按买家用户名定位会话卡，TIK-018 实测选择器）。
+                #    注：:text-is 嵌套在 :has() 内不受支持（实测匹配 0），用 :has-text。
+                await page.click(self._conversation_selector(recipient_uid))
+                # 2) 统计当前己方气泡数（必须在打开会话之后——消息流仅在该会话
+                #    打开时渲染；成功检测按「数量 +1」增量判定，避免历史气泡恒真）。
+                try:
+                    before_bubbles = await page.locator(SELECTOR_MY_MESSAGE_BUBBLE).count()
+                except Exception:  # noqa: BLE001 - 假页面无 locator 时退化为 0
+                    before_bubbles = 0
+                # 3) 输入框填入（human-like 逐字输入在 _type_humanlike 内）。
                 await page.fill(SELECTOR_MESSAGE_INPUT, "")
                 await self._type_humanlike(page, content)
-                # 3) 点击发送。
+                # 4) 点击发送。
                 await page.click(SELECTOR_SEND_BUTTON)
-                # 4) 成功检测：消息流出现己方气泡（超时内等待）。
-                appeared = await self._wait_my_bubble(page)
+                # 5) 成功检测：消息流出现「第 before_bubbles+1 个」己方气泡。
+                appeared = await self._wait_my_bubble(page, before_bubbles)
                 if not appeared:
                     logger.error(
                         "TikTok 发送后未检测到己方气泡(超时): shop_id=%s, to=%s",
@@ -212,23 +222,6 @@ class TikTokSender:
             "content": content,
         }
 
-    async def _enforce_min_send_interval(self) -> None:
-        """频率断路器：发送最小随机间隔（PLAN §7，主循环侧执行）。
-
-        每次发送前采样一个 ``[min_send_interval, max_send_interval]`` 区间内的随机
-        间隔并 sleep，模拟人工回复节奏、降低相邻发送过于密集触发平台风控的概率。
-        区间上限 ≤ 0（如测试注入 0）时跳过 sleep，避免无谓等待。
-
-        说明：间隔为「每条发送前」的随机睡眠，非「距上次发送」的节流——对齐 PLAN §7
-        原话（``asyncio.sleep(random.uniform(min,max))`` 于主循环侧），实现最简单、
-        且对 TikTok 这种低频率回复场景足够（45-120s 天然限速）。
-        """
-        if self.max_send_interval <= 0:
-            return
-        interval = random.uniform(self.min_send_interval, self.max_send_interval)
-        if interval > 0:
-            await asyncio.sleep(interval)
-
     async def _type_humanlike(self, page: Any, content: str) -> None:
         """human-like 逐字输入（模拟人工打字节奏）。
 
@@ -239,19 +232,33 @@ class TikTokSender:
         # 简单分段：逐字输入（真实场景叠加随机延迟，此处保持测试可预测）。
         await page.type(SELECTOR_MESSAGE_INPUT, content)
 
-    async def _wait_my_bubble(self, page: Any) -> bool:
-        """等待消息流出现己方气泡（成功检测）。
+    async def _wait_my_bubble(self, page: Any, before_bubbles: int = 0) -> bool:
+        """等待消息流出现「第 before_bubbles+1 个」己方气泡（成功检测）。
 
-        使用选择器等待，超时时限取 ``send_timeout`` 的一部分（此处用整体超时兜底，
-        真实环境可细分）。超时或异常返回 False。
+        TIK-018 实测升级：会话内可能已有历史己方气泡，简单等待任一气泡出现会
+        恒真；改用 ``:nth-match`` 按「数量增量」等待新气泡。超时或异常返回 False。
         """
+        nth = max(int(before_bubbles or 0), 0) + 1
         try:
             await page.wait_for_selector(
-                SELECTOR_MY_MESSAGE_BUBBLE, timeout=self.send_timeout * 1000
+                f":nth-match({SELECTOR_MY_MESSAGE_BUBBLE}, {nth})",
+                timeout=self.send_timeout * 1000,
             )
             return True
         except Exception:  # noqa: BLE001 - 超时 / 选择器缺失均视为未出现
             return False
+
+    @staticmethod
+    def _conversation_selector(recipient_uid: str) -> str:
+        """按买家用户名构造目标会话卡选择器（TIK-018 实测结构）。
+
+        会话卡无稳定 uid 属性；``:has(:text-is(...))`` 嵌套文本伪类不受 Playwright
+        支持（实测匹配 0），故用 ``:has-text``（卡文本含用户名，子串匹配）。同名
+        前缀买家（如 test / test2）存在误配可能，Phase 1 单测试店可接受，转人工
+        / 多买家精确路由列为 Phase 2 改进。
+        """
+        safe = str(recipient_uid).replace("\\", "\\\\").replace('"', '\\"')
+        return f"{SELECTOR_CONVERSATION_ITEM}:has-text(\"{safe}\")"
 
     def _get_page(self) -> Any:
         """从注入的浏览器会话获取活跃页面（可注入 FakePage）。"""

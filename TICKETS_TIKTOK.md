@@ -281,6 +281,12 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
   3. **浏览器死亡无感知**：快照抓取为纯逻辑桩不触碰页面时，杀浏览器无任何告警。已补监控循环每轮 `_check_page_alive()` 最小存活探测（evaluate 失败 → `connection_disconnected`）+ 测试。实测杀浏览器后 **4 秒内**告警。
   4. **告警服务间链路缺失**：`build_alert_notifier` 的 `send_cb` 恒为 `None`（仅日志占位），告警到不了企微。已补：backend 新增内部接口 `POST /api/v1/internal/notify-events`（X-Internal-Token 鉴权，转交 `push_system_event`，`operator_id=None` 系统内部调用）；websocket 新增 `engine/alert_forwarder.py`（`backend_alert_send_cb`，fire-and-forget 线程池转发）并注入 PDD/TikTok/cookie 刷新三处调用点。实测杀浏览器后 `pdd_notify_record` 落库 success（企微 errcode 校验真实送达）。
   5. websocket 301 / backend 237 用例全绿（各含新增用例）。
+- **选择器回填与收发链路打通（2026-08-29 晚）**：
+  1. 真实买家会话（ddy39s 发「测试」）实测回填 5 个选择器至 selectors.py：会话卡/用户名用平台官方 `data-testid`（`chat.chatroom.conversation_card[_username]`）、消息流 `.chatd-scrollView-content`、己方气泡 `.chatd-bubble--self`、输入框 `textarea[placeholder]`（主输入唯一带 placeholder 属性）、发送按钮 `.p-btn-primary:has-text("发送")`。
+  2. `_capture_conversations` 真实实现：**未读角标驱动**（仅 `.p-badge` 会话入快照，msg_id=买家名+预览文本）——本店发送不产生未读，diff 天然规避自激循环。
+  3. 发送链路实测修正 3 处：`:has(:text-is(...))` 嵌套文本伪类 Playwright 不支持（匹配 0）→ 改 `:has-text`；气泡计数须在**打开会话后**统计（消息流仅打开时渲染）且成功检测改 `:nth-match` 数量增量；`page.count` 不存在改 `locator().count()`。
+  4. 频率断路器修正：45-120s 节流从桥接协程内移到 `send_text` 桥接前（同步 sleep）——原实现桥接等待超时仅 15s，节流必然超时误判失败。
+  5. **端到端实测通过**：买家「测试」→ 快照 diff → 45s 去抖 → 默认回复决策 → DOM 发送成功（20:50:23 success=True），页面确认己方气泡出现且经平台自动翻译送达买家；决策→发出全程 128s（< 300s 验收阈值）。对账 CLI 正常出数（ddy39s 收 3/发 1，多收 2 条为调试期重启重复消费）。
 - **批次**：D1 ｜ **依赖**：TIK-014 ~ TIK-017 全部 ｜ **预估**：1 人日 + 周末窗口实测
 - **说明**：Phase 1 出口验收，对齐 PLAN §10「关键验收」与 §1 出口标准。
 - **需要用户配合**：测试店账号、企微群（收告警）。

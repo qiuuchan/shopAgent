@@ -65,6 +65,35 @@ MessageHandler = Callable[..., Any]
 # 事件通知器签名：event_notifier(event_type: str, content: str) -> Any
 EventNotifier = Callable[[str, str], Any]
 
+# 会话快照抓取 JS（TIK-018 实测实现，在聊天页上下文执行）。
+# 选择器与 selectors.py 的 SELECTOR_CONVERSATION_ITEM / SELECTOR_CONVERSATION_ITEM_
+# USERNAME / SELECTOR_UNREAD_BADGE 保持同步（JS 字符串内不便引用 Python 常量）。
+# 产出：仅含未读角标会话的 [{name, content}]；content 为剔除用户名 / 纯数字角标 /
+# 状态标签（未回复/人工/已回复/置顶）后的最新消息预览。
+_CONVERSATION_SNAPSHOT_JS = """
+() => {
+  const TAGS = new Set(['未回复', '已回复', '人工', '置顶']);
+  const cards = Array.from(
+    document.querySelectorAll('[data-testid="chat.chatroom.conversation_card"]')
+  );
+  const out = [];
+  for (const c of cards) {
+    const nameEl = c.querySelector(
+      '[data-testid="chat.chatroom.conversation_card_username"]'
+    );
+    const name = nameEl ? (nameEl.innerText || '').trim() : '';
+    if (!name) continue;
+    if (!c.querySelector('.p-badge')) continue;
+    const lines = (c.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
+    const content = lines
+      .filter(l => l !== name && !TAGS.has(l) && !/^\\d+$/.test(l))
+      .pop() || '';
+    out.push({name: name, content: content});
+  }
+  return out;
+}
+"""
+
 
 # ----------------------------------------------------------------------
 # 纯函数：会话快照 diff（可属性测试，无 I/O）
@@ -457,13 +486,45 @@ class TikTokChannel:
         logger.info("TikTok 监控循环退出: shop_id=%s", self.shop_id)
 
     async def _capture_conversations(self) -> Dict[str, Any]:
-        """抓取当前会话列表快照（选择器待 TIK-018 回填；当前返回空映射，测试注入桩）。"""
+        """抓取会话列表快照（TIK-018 实测实现：未读角标驱动）。
+
+        实测 DOM 结构（2026-08-29，选择器见 ``selectors.py``）：会话卡
+        ``conversation_card`` 含买家用户名（``conversation_card_username``）、
+        未读角标（``.p-badge``）与最新消息预览文本（innerText 末行，另混有
+        「未回复/人工」等状态标签行）。
+
+        快照语义：**仅未读会话入快照**——买家新消息产生未读角标，而本店自己
+        发送不产生，diff 以「卡内最新消息内容」为 msg_id，天然规避「自己回复
+        又触发一轮买家消息」的自激循环；角标在发送方点击会话卡后由平台清除。
+
+        Returns:
+            ``{conversation_id(买家用户名): 原始消息字典}``；页面不可用返回空映射。
+        """
         page = self._browser_session.page if self._browser_session else None
         if page is None:
             return {}
-        # TODO(TIK-018 实测): 使用 SELECTOR_CONVERSATION_ITEM 解析会话列表，构造
-        # {conversation_id: {from_user/sender_role, msg_id, content, ...}} 映射。
-        return {}
+        cards = await page.evaluate(_CONVERSATION_SNAPSHOT_JS)
+        if not isinstance(cards, list):
+            return {}
+        snapshot: Dict[str, Any] = {}
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            name = card.get("name")
+            content = card.get("content")
+            if not name or not content:
+                continue
+            snapshot[name] = {
+                "conversation_id": name,
+                "nickname": name,
+                "from_uid": name,
+                "sender_role": "buyer",
+                "msg_type": "text",
+                "content": content,
+                "msg_id": f"{name}:{content}",
+                "timestamp": None,
+            }
+        return snapshot
 
     @staticmethod
     def _normalize_message(msg: Any) -> Any:
