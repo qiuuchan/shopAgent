@@ -30,7 +30,7 @@
 | 维度 | 数据 |
 | --- | --- |
 | 服务拆分 | 4 后端微服务（common 公共库 + backend API + websocket 长连接 + scheduler 定时）+ Vue3 前端 |
-| 测试用例 | **606 个**（common 35 / backend 237 / websocket 301 / scheduler 33），重跑全绿 |
+| 测试用例 | **624 个**（common 35 / backend 237 / websocket 319 / scheduler 33），重跑全绿 |
 | 属性测试 | Hypothesis `max_examples=200`，内存 SQLite + `@compiles(BigInteger,"sqlite")` 适配，不依赖真实 MySQL/Redis |
 | TikTok 通道 | 8 模块（channel/login/sender/session/selectors/guard/recovery/message），单文件 ≤500 行 |
 | LLM 协议适配 | 4 类（OpenAI 兼容 / Anthropic / Gemini / DashScope） |
@@ -135,7 +135,7 @@
 | 工具调用 / Function Calling | OpenAI function schema + TOOL_REGISTRY + 店铺隔离参数注入 + 缺参中文提示 |
 | 安全与护栏 | JWT 黑名单 + Fernet 加密 + 参数化 SQL + 密钥防泄漏 + RBAC 权限模块 |
 | 工程化部署 | Docker Compose 6 服务 + 健康检查 + 滚动更新 + MySQL/Redis + CI/CD 脚本 |
-| 测试与工程质量 | 606 用例 + Hypothesis 属性测试 + 内存 SQLite 隔离全绿（满足"可展示的完整 Agent 项目案例"直接要求） |
+| 测试与工程质量 | 624 用例 + Hypothesis 属性测试 + 内存 SQLite 隔离全绿（满足"可展示的完整 Agent 项目案例"直接要求） |
 
 ### 部分匹配（可讲、但别吹过头）
 - **RAG**：jieba 关键词 + goods_id 精确匹配，缺向量检索/Embedding/混合检索/重排
@@ -144,7 +144,7 @@
 
 ### 待补强（面试会被追问的 2 个缺口）
 1. **LangChain/LangGraph 框架**：JD 点名频率最高的框架，本项目为自研 ReAct 循环。面试须能讲清"为什么自研"（成本可控、无框架绑定、决策链/工具调用逻辑自己完全掌握）；简历表述为"自研 Agent 循环（ReAct 模式）"而非"熟悉 LangChain"。
-2. **LLM 效果评测体系**：2026 年 JD 最强调的差异化技能（golden dataset / LLM-as-judge / RAGAS）。项目有 601 工程测试但无 LLM 效果评测。
+2. **LLM 效果评测体系**：2026 年 JD 最强调的差异化技能（golden dataset / LLM-as-judge / RAGAS）。项目有 624 工程测试但无 LLM 效果评测。
 
 ### 补强路线（按回报排序）
 - **P0（1-2 天，回报最高）**：给知识库检索加向量检索层——sqlite-vec 或 Qdrant 做 Embedding + BM25 关键词与向量混合检索（可复用本人 KB-AI 项目的 Qdrant + Cross-Encoder 重排经验），补齐 JD 第一高频技术（RAG 60%+ 提及率），面试可讲"混合检索 + 重排"生产级方案

@@ -22,9 +22,10 @@ channel_tiktok.tiktok_sender —— TikTok 消息 DOM 发送器
   仅 15s，45-120s 节流必然超时误判失败）。
 - ``send_image`` 显式不支持（Phase 1 返回 None）。
 
-选择器处理：会话列表项 / 输入框 / 发送按钮 / 消息流 / 己方气泡选择器在本文件以
-TODO(TIK-018 实测) 占位常量声明，不臆造实测值（空店无活跃会话不渲染，见
-selectors.py「待确认项」）。正式取值待 TIK-018 真实会话补测回填。
+选择器处理：会话列表项 / 输入框 / 发送按钮 / 消息流 / 己方气泡选择器均已在
+TIK-018 实测回填（见 ``selectors.py``「聊天页结构选择器」），此处 re-export 供
+测试 / 上层引用。会话定位为 Phase 2 精确路由：按用户名经 ``conversation_nav``
+严格相等匹配后 nth-match 点击，同名前缀买家不再互相误配（未命中不发送）。
 
 实现约束（开发规范）：单文件 ≤500 行（35）、中文注释（37/50）、日志禁用 debug（38）、
 不做真实浏览器操作（仅注入假对象测试，TIK-012 不联调）。
@@ -50,6 +51,7 @@ DEFAULT_MAX_SEND_INTERVAL_SECONDS: float = 120.0
 
 # 选择器（TIK-018 真实会话实测回填，定义见 selectors.py「聊天页结构选择器」）。
 # 此处 re-export 供测试 / 上层引用（历史占位常量已由实测值替换）。
+from channel_tiktok.conversation_nav import click_conversation_exact
 from channel_tiktok.selectors import (  # noqa: F401 - re-export
     SELECTOR_CONVERSATION_ITEM,
     SELECTOR_CONVERSATION_ITEM_USERNAME,
@@ -189,9 +191,17 @@ class TikTokSender:
                 return None
             # 频率断路器：已于 send_text 桥接前完成（见其注释），协程内仅做 DOM 操作。
             try:
-                # 1) 点击目标会话（按买家用户名定位会话卡，TIK-018 实测选择器）。
-                #    注：:text-is 嵌套在 :has() 内不受支持（实测匹配 0），用 :has-text。
-                await page.click(self._conversation_selector(recipient_uid))
+                # 1) 精确点击目标会话（Phase 2 同名前缀精确路由）：按买家用户名
+                #    严格相等匹配会话卡（conversation_nav，evaluate 收集 +
+                #    nth-match 点击），未命中（无匹配 / 同名歧义）**不发送**，
+                #    防止回复误发同名前缀的其它买家（宁失败不误发）。
+                clicked = await click_conversation_exact(page, recipient_uid)
+                if not clicked:
+                    logger.error(
+                        "TikTok 发送失败: 未找到精确匹配的会话卡 shop_id=%s, to=%s",
+                        self.shop_id, recipient_uid,
+                    )
+                    return None
                 # 2) 统计当前己方气泡数（必须在打开会话之后——消息流仅在该会话
                 #    打开时渲染；成功检测按「数量 +1」增量判定，避免历史气泡恒真）。
                 try:
@@ -247,18 +257,6 @@ class TikTokSender:
             return True
         except Exception:  # noqa: BLE001 - 超时 / 选择器缺失均视为未出现
             return False
-
-    @staticmethod
-    def _conversation_selector(recipient_uid: str) -> str:
-        """按买家用户名构造目标会话卡选择器（TIK-018 实测结构）。
-
-        会话卡无稳定 uid 属性；``:has(:text-is(...))`` 嵌套文本伪类不受 Playwright
-        支持（实测匹配 0），故用 ``:has-text``（卡文本含用户名，子串匹配）。同名
-        前缀买家（如 test / test2）存在误配可能，Phase 1 单测试店可接受，转人工
-        / 多买家精确路由列为 Phase 2 改进。
-        """
-        safe = str(recipient_uid).replace("\\", "\\\\").replace('"', '\\"')
-        return f"{SELECTOR_CONVERSATION_ITEM}:has-text(\"{safe}\")"
 
     def _get_page(self) -> Any:
         """从注入的浏览器会话获取活跃页面（可注入 FakePage）。"""

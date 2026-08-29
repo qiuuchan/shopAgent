@@ -287,7 +287,7 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
   - 验收 3 ✅：杀浏览器 4s 内 `connection_disconnected` 告警，企微实收（用户确认）；
   - 验收 4 ✅：静默窗口 5 分钟无重复，恢复重连后再次故障 6s 内可再告警；
   - 验收 5 ✅：窗外 scheduler 收敛断开 + 重启跳过建连（双道闸），窗内 1 周期内自动重连。
-- **遗留（不阻塞关单）**：① 回声方向复核已修（297c746）并实测验证（发送后 3.5 分钟零新增决策）；② 「转人工」命中默认回复——测试店未配转人工关键词（`pdd_transfer_keyword` 空），属店铺配置项；③ 会话卡按 `:has-text` 用户名子串定位，同名前缀多买家精确路由留 Phase 2。
+- **遗留（不阻塞关单）**：① 回声方向复核已修（297c746）并实测验证（发送后 3.5 分钟零新增决策）；② 「转人工」命中默认回复——测试店未配转人工关键词（`pdd_transfer_keyword` 空），属店铺配置项；③ ~~会话卡按 `:has-text` 用户名子串定位，同名前缀多买家精确路由留 Phase 2~~ **已处理（Phase 2，2026-08-29）**：新增 `conversation_nav.py` 会话卡精确导航——JS 收集全量卡（含 index/unread）+ Python 严格相等匹配 + `:nth-match` 精确点击，捕获（`_capture_conversations`）与发送（`TikTokSender`）两侧统一复用；同名前缀（如 ddy39s / ddy39s2）不再互相误配，未命中 / 同名歧义时发送侧不发送（宁失败不误发）、捕获侧跳过该卡；配套测试 18 个（含属性测试与假页面精确点击回归）。
 - **选择器回填与收发链路打通（2026-08-29 晚）**：
   1. 真实买家会话（ddy39s 发「测试」）实测回填 5 个选择器至 selectors.py：会话卡/用户名用平台官方 `data-testid`（`chat.chatroom.conversation_card[_username]`）、消息流 `.chatd-scrollView-content`、己方气泡 `.chatd-bubble--self`、输入框 `textarea[placeholder]`（主输入唯一带 placeholder 属性）、发送按钮 `.p-btn-primary:has-text("发送")`。
   2. `_capture_conversations` 真实实现：**未读角标驱动**（仅 `.p-badge` 会话入快照，msg_id=买家名+预览文本）——本店发送不产生未读，diff 天然规避自激循环。

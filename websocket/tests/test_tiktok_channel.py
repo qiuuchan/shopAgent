@@ -18,6 +18,7 @@ test_tiktok_channel —— TikTokChannel 主循环单元测试（TIK-013）
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
@@ -47,6 +48,50 @@ def fake_browser():
 def in_hours(monkeypatch):
     """mock 营业时间查询：无配置（视为全天营业，窗口内）。"""
     monkeypatch.setattr(tc_mod, "_query_business_hours", lambda pk: None)
+
+
+class _CaptureFakePage:
+    """按 evaluate JS 内容区分返回的假页面（_capture_conversations 真实路径）。
+
+    支持三种 evaluate：会话卡收集（conversation_card，可配置卡片列表与两次
+    收集差异）、最后气泡读取（chatd-scrollView-content，按当前打开会话名返回
+    方向与文本）、其余（存活探测等默认返回 1）。click 从 nth-match 选择器解析
+    卡索引并记录当前会话。
+    """
+
+    def __init__(
+        self,
+        cards: List[Dict[str, Any]],
+        last_bubbles: Dict[str, Dict[str, Any]],
+        cards_on_recollect: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        self.cards = cards
+        self.last_bubbles = last_bubbles
+        self.cards_on_recollect = cards_on_recollect
+        self.clicks: List[str] = []
+        self.current: Optional[str] = None
+        self._collect_count = 0
+
+    async def evaluate(self, js: str, *args: Any) -> Any:
+        if "conversation_card" in js:
+            self._collect_count += 1
+            if self._collect_count > 1 and self.cards_on_recollect is not None:
+                return self.cards_on_recollect
+            return self.cards
+        if "chatd-scrollView-content" in js:
+            last = self.last_bubbles.get(self.current or "", {})
+            return last
+        return 1
+
+    async def click(self, selector: str) -> None:
+        self.clicks.append(selector)
+        m = re.search(r", (\d+)\)$", selector)
+        idx = int(m.group(1)) - 1 if m else 0
+        card = self.cards[idx] if 0 <= idx < len(self.cards) else {}
+        self.current = card.get("name")
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        return None
 
 
 # ----------------------------------------------------------------------
@@ -523,6 +568,89 @@ def test_diff_empty_when_identical(pair):
     assert diff_conversations(old, new) == []
 
 
+# ----------------------------------------------------------------------
+# 5. _capture_conversations 真实实现（Phase 2 精确路由回归）
+# ----------------------------------------------------------------------
+def test_capture_conversations_unread_filter_and_exact_click():
+    """未读过滤 + 同前缀精确点击 + 方向复核：仅买家新消息入快照。
+
+    卡片：ddy39s(未读,买家消息) / ddy39s2(非未读) / alice(未读,己方气泡)。
+    期望：ddy39s 入快照；ddy39s2 因非未读跳过；alice 经方向复核（self）跳过；
+    点击全部走 nth-match 精确选择器（无 :has-text 子串匹配）。
+    """
+    cards = [
+        {"index": 0, "name": "ddy39s", "unread": True},
+        {"index": 1, "name": "ddy39s2", "unread": False},
+        {"index": 2, "name": "alice", "unread": True},
+    ]
+    page = _CaptureFakePage(
+        cards,
+        last_bubbles={
+            "ddy39s": {"self": False, "text": "你好"},
+            "alice": {"self": True, "text": "平台译文"},
+        },
+    )
+    browser = MagicMock()
+    browser.page = page
+    queue: FifoMessageQueue = FifoMessageQueue(name="test:capture")
+    ch = TikTokChannel(
+        shop_id="t1", user_id=1, shop_pk=1, message_queue=queue,
+        message_handler=AsyncMock(), browser_session=browser,
+    )
+
+    snapshot = asyncio.run(ch._capture_conversations())
+
+    assert set(snapshot) == {"ddy39s"}
+    msg = snapshot["ddy39s"]
+    assert msg["conversation_id"] == "ddy39s"
+    assert msg["from_uid"] == "ddy39s"
+    assert msg["sender_role"] == "buyer"
+    assert msg["content"] == "你好"
+    assert msg["msg_id"] == "ddy39s:你好"
+    # 精确点击：ddy39s → 第 1 张卡；alice → 第 3 张卡（无 :has-text 子串匹配）。
+    assert page.clicks == [
+        ':nth-match([data-testid="chat.chatroom.conversation_card"], 1)',
+        ':nth-match([data-testid="chat.chatroom.conversation_card"], 3)',
+    ]
+
+
+def test_capture_conversations_skip_when_card_vanished():
+    """点击瞬间卡片消失（二次收集无该卡）→ 跳过该卡，不抛异常、不影响其余卡。"""
+    cards = [
+        {"index": 0, "name": "ddy39s", "unread": True},
+        {"index": 1, "name": "alice", "unread": True},
+    ]
+    # 首次收集返回 2 张未读卡；点击时再次收集返回空（模拟 DOM 变化）。
+    page = _CaptureFakePage(
+        cards,
+        last_bubbles={"alice": {"self": False, "text": "在吗"}},
+        cards_on_recollect=[],
+    )
+    browser = MagicMock()
+    browser.page = page
+    queue: FifoMessageQueue = FifoMessageQueue(name="test:capture2")
+    ch = TikTokChannel(
+        shop_id="t1", user_id=1, shop_pk=1, message_queue=queue,
+        message_handler=AsyncMock(), browser_session=browser,
+    )
+
+    snapshot = asyncio.run(ch._capture_conversations())
+
+    # 两张卡点击均未命中（二次收集为空）→ 快照为空，且无异常上抛。
+    assert snapshot == {}
+
+
+def test_capture_conversations_no_page_returns_empty():
+    """无浏览器会话（page 为 None）→ 返回空映射（不抛异常）。"""
+    queue: FifoMessageQueue = FifoMessageQueue(name="test:capture3")
+    ch = TikTokChannel(
+        shop_id="t1", user_id=1, shop_pk=1, message_queue=queue,
+        message_handler=AsyncMock(), browser_session=None,
+    )
+
+    assert asyncio.run(ch._capture_conversations()) == {}
+
+
 __all__ = [
     "test_start_then_stop_cleans_tasks",
     "test_stop_without_start_is_safe",
@@ -538,4 +666,7 @@ __all__ = [
     "test_diff_handles_none_inputs",
     "test_diff_properties",
     "test_diff_empty_when_identical",
+    "test_capture_conversations_unread_filter_and_exact_click",
+    "test_capture_conversations_skip_when_card_vanished",
+    "test_capture_conversations_no_page_returns_empty",
 ]

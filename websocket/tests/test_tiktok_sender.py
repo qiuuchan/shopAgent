@@ -8,6 +8,7 @@ websocket.tests.test_tiktok_sender —— TikTok 发送器单元测试（TIK-012
 - FakePage 注入：点击会话 / 输入 / 发送调用序正确；
 - human-like 输入（type）调用序；
 - 成功检测（等待己方气泡出现）与超时失败；
+- Phase 2 同名前缀精确路由（u_1 / u_12 不互相误配、无匹配不发送、同名歧义不发送）；
 - 线程桥接（run_coroutine_threadsafe）mock 验证；
 - 并发串行化（asyncio.Lock 同一锁保证顺序）；
 - send_image 显式不支持返回 None。
@@ -26,16 +27,29 @@ from channel_tiktok.tiktok_sender import TikTokSender
 class FakePage:
     """记录调用的假页面对象（无需真实浏览器）。
 
-    支持：click / fill / type / wait_for_selector。``bubble_appears`` 控制
-    wait_for_selector(己方气泡) 是否成功（模拟成功检测 / 超时失败）。
+    支持：evaluate（会话卡收集，返回可配置 cards）/ click / fill / type /
+    wait_for_selector。``bubble_appears`` 控制 wait_for_selector(己方气泡) 是否
+    成功（模拟成功检测 / 超时失败）。``cards`` 为 ``conversation_nav`` 收集 JS
+    的返回值（``[{index, name, unread}]``），供精确会话定位使用。
     """
 
-    def __init__(self, bubble_appears: bool = True, wait_raise: bool = False) -> None:
+    def __init__(
+        self,
+        bubble_appears: bool = True,
+        wait_raise: bool = False,
+        cards: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         self.calls: List[str] = []
         self.bubble_appears = bubble_appears
         self.wait_raise = wait_raise  # 若 True，wait_for_selector 抛超时异常
         # 既有己方气泡数（count 桩，模拟会话历史气泡；TIK-018 增量检测）。
         self.existing_bubbles = 0
+        # 会话卡收集返回值（默认单卡 u_1，与既有测试用例的收件人一致）。
+        self.cards = cards if cards is not None else [{"index": 0, "name": "u_1"}]
+
+    async def evaluate(self, js: str, *args: Any) -> Any:
+        self.calls.append(f"evaluate:{js[:40]}")
+        return self.cards
 
     async def click(self, selector: str) -> None:
         self.calls.append(f"click:{selector}")
@@ -141,14 +155,15 @@ def test_send_text_call_sequence():
 
     assert result is not None
     assert result["success"] is True
-    # 调用序校验（首个 DOM 操作为点击会话卡；随后统计既有己方气泡）。
-    assert page.calls[0].startswith("click:")
+    # 调用序校验（首个 DOM 操作为会话卡收集 evaluate；随后精确点击目标会话卡）。
+    assert page.calls[0].startswith("evaluate:")
+    assert any(c.startswith("click:") for c in page.calls)
     assert any(c.startswith("count:") for c in page.calls)
     assert any(c.startswith("fill:") for c in page.calls)
     assert any(c.startswith("type:") for c in page.calls)
     assert any(c.startswith("wait:") for c in page.calls)
-    # 会话定位选择器含 recipient_uid。
-    assert any(f"u_1" in c for c in page.calls if c.startswith("click:"))
+    # 会话定位按收集结果的精确匹配索引点击（nth-match 第 1 张卡 = u_1）。
+    assert any("click::nth-match" in c and ", 1)" in c for c in page.calls)
 
 
 def test_send_text_bubble_timeout_failure():
@@ -161,6 +176,70 @@ def test_send_text_bubble_timeout_failure():
 
     result = asyncio.run(_run())
     assert result is None
+
+
+# ----------------------------------------------------------------------
+# Phase 2 同名前缀精确路由
+# ----------------------------------------------------------------------
+def test_send_text_exact_prefix_disambiguation():
+    """同名前缀买家（u_1 / u_12）按精确用户名路由，不互相误配。
+
+    卡片顺序 u_1(0)、u_12(1)：发 u_12 应点击 nth-match 第 2 张卡；发 u_1 应
+    点击第 1 张卡——证明匹配基于严格相等而非子串。
+    """
+    cards = [
+        {"index": 0, "name": "u_1", "unread": True},
+        {"index": 1, "name": "u_12", "unread": True},
+    ]
+    # 1) 发送给 u_12 → 精确命中索引 1 → 点击第 2 张卡。
+    page12 = FakePage(cards=cards)
+    sender12 = _make_sender(page12)
+
+    async def _run12():
+        return await sender12._dom_send_text("u_12", "给 u_12")
+
+    assert asyncio.run(_run12()) is not None
+    assert any("click::nth-match" in c and ", 2)" in c for c in page12.calls)
+
+    # 2) 发送给 u_1 → 精确命中索引 0 → 点击第 1 张卡（不被 u_12 干扰）。
+    page1 = FakePage(cards=cards)
+    sender1 = _make_sender(page1)
+
+    async def _run1():
+        return await sender1._dom_send_text("u_1", "给 u_1")
+
+    assert asyncio.run(_run1()) is not None
+    assert any("click::nth-match" in c and ", 1)" in c for c in page1.calls)
+
+
+def test_send_text_exact_no_match_returns_none():
+    """目标买家不在会话列表 → 不发送（返回 None），且无后续 DOM 操作。"""
+    cards = [{"index": 0, "name": "other", "unread": True}]
+    page = FakePage(cards=cards)
+    sender = _make_sender(page)
+
+    async def _run():
+        return await sender._dom_send_text("u_1", "你好")
+
+    assert asyncio.run(_run()) is None
+    # 仅执行了会话卡收集 evaluate，未点击 / 输入 / 发送。
+    assert all(c.startswith("evaluate:") for c in page.calls)
+
+
+def test_send_text_exact_duplicate_name_returns_none():
+    """完全同名重复命中（歧义）→ 不发送（宁失败不误发）。"""
+    cards = [
+        {"index": 0, "name": "u_1", "unread": True},
+        {"index": 1, "name": "u_1", "unread": True},
+    ]
+    page = FakePage(cards=cards)
+    sender = _make_sender(page)
+
+    async def _run():
+        return await sender._dom_send_text("u_1", "你好")
+
+    assert asyncio.run(_run()) is None
+    assert all(c.startswith("evaluate:") for c in page.calls)
 
 
 def test_send_image_not_supported():

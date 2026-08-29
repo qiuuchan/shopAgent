@@ -41,11 +41,14 @@ from channel_pdd.core.connection_status import (
 )
 from channel_pdd.message_queue import FifoMessageQueue
 from channel_tiktok.browser_session import BrowserSession
+from channel_tiktok.conversation_nav import (
+    COLLECT_CARDS_JS,
+    click_conversation_exact,
+)
 from channel_tiktok.login_recovery import wait_login_recovery
 from channel_tiktok.selectors import (
     IM_EXPIRED_MODAL_MARKERS,
     LOGIN_PAGE_MARKERS,
-    SELECTOR_CONVERSATION_ITEM,
     TIKTOK_CHAT_PATH,
     TIKTOK_CHAT_URL_TEMPLATE,
     TIKTOK_SELLER_URL,
@@ -66,29 +69,10 @@ MessageHandler = Callable[..., Any]
 # 事件通知器签名：event_notifier(event_type: str, content: str) -> Any
 EventNotifier = Callable[[str, str], Any]
 
-# 未读会话卡收集 JS（TIK-018 实测实现，在聊天页上下文执行）。
-# 选择器与 selectors.py 的 SELECTOR_CONVERSATION_ITEM / SELECTOR_UNREAD_BADGE
-# 保持同步（JS 字符串内不便引用 Python 常量）。
-# 产出：仅含未读角标会话的 [{name}]（预览文本不在此取——预览可能是本店回复的
-# 平台译文，无法据其判定方向，方向复核在 Python 侧逐卡打开后进行）。
-_UNREAD_CARDS_JS = """
-() => {
-  const cards = Array.from(
-    document.querySelectorAll('[data-testid="chat.chatroom.conversation_card"]')
-  );
-  const out = [];
-  for (const c of cards) {
-    const nameEl = c.querySelector(
-      '[data-testid="chat.chatroom.conversation_card_username"]'
-    );
-    const name = nameEl ? (nameEl.innerText || '').trim() : '';
-    if (!name) continue;
-    if (!c.querySelector('.p-badge')) continue;
-    out.push({name: name});
-  }
-  return out;
-}
-"""
+# 会话卡收集与精确导航（Phase 2 同名前缀多买家路由）：见 conversation_nav.py。
+# 未读过滤改在 Python 侧完成（收集 JS 返回全量卡含 unread 标志）；预览文本不在此
+# 取——预览可能是本店回复的平台译文，无法据其判定方向，方向复核在 Python 侧
+# 逐卡打开后进行。
 
 # 最后一条气泡读取 JS：取消息流末行，判定方向并抽取文本（气泡内首个 <pre> 为
 # 原文，其余为平台译文块；系统提示行无气泡，self/other 均为 false）。
@@ -509,11 +493,16 @@ class TikTokChannel:
         ``conversation_card`` 含买家用户名与未读角标（``.p-badge``）。
 
         快照语义（两道过滤，规避自激循环）：
-        1. **仅未读会话参与**：买家新消息产生未读角标；
+        1. **仅未读会话参与**：买家新消息产生未读角标（收集 JS 返回全量卡，
+           Python 侧按 unread 标志过滤）；
         2. **方向复核**：本店回复经 CS 子账号发出后，主账号视角下**自己发送的
            消息也会带未读角标**（实测踩坑），故逐卡打开会话读最后一条气泡方向
            （``.chatd-bubble--self`` / ``--other``），仅买家消息入快照；打开动作
            同时清除角标，避免重复消费。
+
+        会话卡定位（Phase 2 精确路由）：按用户名经 ``click_conversation_exact``
+        严格相等匹配点击，同名前缀买家（如 ddy39s / ddy39s2）不再互相误配；
+        未命中（无匹配 / 同名歧义）记录警告并跳过该卡。
 
         Returns:
             ``{conversation_id(买家用户名): 原始消息字典}``；页面不可用返回空映射。
@@ -521,7 +510,7 @@ class TikTokChannel:
         page = self._browser_session.page if self._browser_session else None
         if page is None:
             return {}
-        cards = await page.evaluate(_UNREAD_CARDS_JS)
+        cards = await page.evaluate(COLLECT_CARDS_JS)
         if not isinstance(cards, list):
             return {}
         snapshot: Dict[str, Any] = {}
@@ -529,11 +518,18 @@ class TikTokChannel:
             if not isinstance(card, dict):
                 continue
             name = card.get("name")
-            if not name:
+            if not name or not card.get("unread"):
                 continue
             # 打开该会话（同时清除角标），读最后一条气泡的方向与文本。
+            # 精确匹配点击：未命中（含同名前缀歧义）跳过该卡，不误读他人会话。
             try:
-                await page.click(f'{SELECTOR_CONVERSATION_ITEM}:has-text("{name}")')
+                clicked = await click_conversation_exact(page, name)
+                if not clicked:
+                    logger.warning(
+                        "会话快照跳过（未找到精确匹配会话卡）: shop_id=%s, name=%s",
+                        self.shop_id, name,
+                    )
+                    continue
                 await page.wait_for_timeout(_BUBBLE_READ_WAIT_MS)
                 last = await page.evaluate(_LAST_BUBBLE_JS)
             except Exception as exc:  # noqa: BLE001 - 单卡失败不影响其余会话
