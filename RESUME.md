@@ -30,12 +30,12 @@
 | 维度 | 数据 |
 | --- | --- |
 | 服务拆分 | 4 后端微服务（common 公共库 + backend API + websocket 长连接 + scheduler 定时）+ Vue3 前端 |
-| 测试用例 | **601 个**（common 35 / backend 234 / websocket 299 / scheduler 33），重跑全绿 |
+| 测试用例 | **606 个**（common 35 / backend 237 / websocket 301 / scheduler 33），重跑全绿 |
 | 属性测试 | Hypothesis `max_examples=200`，内存 SQLite + `@compiles(BigInteger,"sqlite")` 适配，不依赖真实 MySQL/Redis |
 | TikTok 通道 | 8 模块（channel/login/sender/session/selectors/guard/recovery/message），单文件 ≤500 行 |
 | LLM 协议适配 | 4 类（OpenAI 兼容 / Anthropic / Gemini / DashScope） |
 | 决策链 | 9 级短路优先级 |
-| 二开 commit | 8 个（平台抽象 + TikTok 通道 + 企微告警 + Flaky/泄漏修复等），全部为本人提交 |
+| 二开 commit | 11 个（平台抽象 + TikTok 通道 + 企微告警链路 + 端到端实测调优等），全部为本人提交 |
 | 基础设施 | MySQL 8.0 + Redis 7 + Docker Compose 编排 6 服务（健康检查 + 滚动更新） |
 
 ---
@@ -79,7 +79,7 @@
 
 ### 5. TikTok Sender 工程化（同步/异步桥接 + 防风控）
 
-`TikTokSender.send_text` 同步签名对齐拼多多 `SendMessage`，经 `asyncio.run_coroutine_threadsafe` 把 DOM 操作调度回主循环执行，对 `MessageConsumer` 完全无感。主循环侧 `asyncio.Lock` 串行化防同店并发 DOM 互扰；成功检测靠 `wait_for_selector` 等己方气泡出现（超时视为失败）；频率断路器在发送前 sleep `[45,120]s` 随机间隔模拟人工节奏降风控（手动发送 `enforce_interval=False` 跳过，避免 15s 发送超时被节流拖垮）。
+`TikTokSender.send_text` 同步签名对齐拼多多 `SendMessage`，经 `asyncio.run_coroutine_threadsafe` 把 DOM 操作调度回主循环执行，对 `MessageConsumer` 完全无感。主循环侧 `asyncio.Lock` 串行化防同店并发 DOM 互扰；成功检测靠 `wait_for_selector` 等己方气泡出现（超时视为失败）；频率断路器在发送前 sleep `[45,120]s` 随机间隔模拟人工节奏降风控（手动发送 `enforce_interval=False` 跳过）。周末实测完成 TIK-018 端到端验收：真实买家消息→9 级决策→DOM 发送全链路打通，稳态首响 69–81s（阈值 300s），并修复 `:has(:text-is)` 不受支持、CS 子账号视角自发送回声、节流超时误判三处实测问题。
 
 ### 6. 测试体系
 
@@ -135,7 +135,7 @@
 | 工具调用 / Function Calling | OpenAI function schema + TOOL_REGISTRY + 店铺隔离参数注入 + 缺参中文提示 |
 | 安全与护栏 | JWT 黑名单 + Fernet 加密 + 参数化 SQL + 密钥防泄漏 + RBAC 权限模块 |
 | 工程化部署 | Docker Compose 6 服务 + 健康检查 + 滚动更新 + MySQL/Redis + CI/CD 脚本 |
-| 测试与工程质量 | 601 用例 + Hypothesis 属性测试 + 内存 SQLite 隔离全绿（满足"可展示的完整 Agent 项目案例"直接要求） |
+| 测试与工程质量 | 606 用例 + Hypothesis 属性测试 + 内存 SQLite 隔离全绿（满足"可展示的完整 Agent 项目案例"直接要求） |
 
 ### 部分匹配（可讲、但别吹过头）
 - **RAG**：jieba 关键词 + goods_id 精确匹配，缺向量检索/Embedding/混合检索/重排
