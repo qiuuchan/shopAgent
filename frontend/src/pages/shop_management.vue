@@ -23,6 +23,7 @@ import { showToast, TOAST_TYPE } from '@/utils/toast'
 import { formatDateTime } from '@/utils/format'
 import ShopSettingsModal from '@/components/shop_settings/ShopSettingsModal.vue'
 import { shopApi } from '@/api'
+import { PLATFORM_OPTIONS } from '@/config/platforms'
 
 // -------------------- 列表状态 --------------------
 const loading = ref(false) // 列表加载遮罩
@@ -86,11 +87,8 @@ const form = reactive({
   proxy_server: '', // 店铺出口代理服务器地址（Phase 2 前置，仅 TikTok 通道消费）
 })
 
-// 平台选项（新增店铺时选择；TikTok 仅支持账号密码登录）
-const PLATFORM_OPTIONS = [
-  { value: 'pdd', label: '拼多多' },
-  { value: 'tiktok', label: 'TikTok Shop' },
-]
+// 平台选项由 config/platforms.js 提供（新增店铺时选择；TikTok 仅支持账号密码登录）
+// 枚举与中文标签集中维护，数据分析页「首响统计」按平台筛选复用同一份（TIK-025）
 
 // 切换平台：TikTok 仅支持账号密码登录，Cookie 导入态强制回到密码登录
 function onPlatformChange() {

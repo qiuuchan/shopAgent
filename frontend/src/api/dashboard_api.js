@@ -17,3 +17,16 @@ export function fetchDashboardOverview() {
 export function fetchDashboardTrend(params = {}) {
   return get(`/dashboard/trend`, params)
 }
+
+// 查询首响时长统计（分布 / 超 5 分钟占比 / 回复率，TIK-025）
+// 参数：{ start_date?, end_date?, platform?, shop_pk? }
+//   platform: 'pdd' | 'tiktok'，缺省=全部平台；shop_pk 缺省=数据范围内全部店铺
+// 返回：{ start_date, end_date, threshold_seconds, platform, shop_pk, shop_count,
+//        summary: { responded_cycles, pending_cycles, over_threshold_count,
+//                   over_threshold_ratio, reply_rate, p50_seconds, ... },
+//        distribution: [{ label, lower, upper, count, ratio }],
+//        shops: [{ shop_pk, shop_name, platform, ...同上指标 }] }
+// 口径：首响 = 本店首次回复 - 该段第一条买家消息；>300s 计超时；待回复与超时均计未达标
+export function fetchFirstResponseStats(params = {}) {
+  return get(`/dashboard/first-response`, params)
+}
