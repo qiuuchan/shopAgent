@@ -2,7 +2,7 @@
 
 > 配套设计文档：[PLAN_TIKTOK.md](./PLAN_TIKTOK.md)（含全部行号/接缝核对，工单不重复展开，细节以该文为准）。
 > 工单编号前缀 `TIK-`；批次 A–D 严格对齐 PLAN_TIKTOK.md 第 10 节「实施顺序」（Phase 1，已全部关单）；批次 E/F 对齐 PLAN §7/§8（Phase 2 收尾 + Phase 3，2026-08-29 立项）。
-> 状态标记：`[ ]` 待办 / `[x]` 完成。
+> 状态标记：`[ ]` 待办 / `[x]` 完成 / `[!]` 搁置或取消（原因见各单）。
 >
 > **每张工单的通用出口准则**（除各自验收标准外必须全部满足）：
 > ① 该工单对应的新增测试（PLAN §6.1 映射，见各工单「验收」）全绿；② 不破坏存量回归基线（backend 207 / websocket 176 / scheduler 17 / common 22）；③ 新增 Python 文件 ≤500 行、模块头中文 docstring、全中文注释与文案；④ 对 PDD 现有路径零行为变更。
@@ -29,15 +29,15 @@
 | TIK-016 | websocket routes login/messages/cookies 平台分派 | C3 | TIK-002、TIK-011、TIK-013 | 1 | [x] |
 | TIK-017 | TIKTOK_* 配置 + Dockerfile/资源调整 | D2 | TIK-001 | 0.5–1 | [x] 已交付（2026-08-28 验证） |
 | TIK-018 | 测试店端到端验收（周末窗口实测） | D1 | TIK-014 ~ TIK-017 全部 | 1 + 周末实测 | [x] 验收通过关单（2026-08-29，5/5 项全过） |
-| TIK-019 | 多店并发实测（2~4 店资源与稳定性） | E1 | 外部：≥2 个 TikTok 测试店账号 | 1–2 + 观察窗口 | [ ] |
+| TIK-019 | 多店并发实测（2~4 店资源与稳定性） | E1 | 外部：≥2 个 TikTok 测试店账号 | 1–2 + 观察窗口 | [!] 搁置（2026-08-29：口径调整，仅监督 1 店） |
 | TIK-020 | 频率断路器配置化（RiskRule 限流规则） | E1 | — | 0.5 | [x] 已交付（2026-08-29 实测通过） |
 | TIK-021 | 对账日常化（reconcile 固化为周期动作） | E1 | — | 0.5–1 | [ ] |
 | TIK-022 | 部署清单落实（.env/内存/卷/灰度开关核对） | E1 | TIK-017 | 0.5–1 | [ ] |
 | TIK-023 | 登录态过期周期观测 + cookie_refresh 周期配置 | E2 | — | 0.5 + 观察窗口 | [~] 工具侧交付（2026-08-29），观测窗口与人工演练待执行 |
-| TIK-024 | 首家真实店铺灰度接入（含转人工关键词配置） | F1 | 批次 E 全部；外部：真实店铺 | 0.5 + 1–2 周观察 | [ ] |
-| TIK-025 | 回复率统计（首响分布/超时占比 + dashboard 平台维度） | F1 | —（可先行开发） | 1.5–2 | [ ] |
+| TIK-024 | 首家真实店铺灰度接入（含转人工关键词配置） | F1 | 批次 E 其余（TIK-019 搁置）；外部：真实店铺 + 生产企微群 | 0.5 + 1–2 周观察 | [ ] |
+| TIK-025 | 回复率统计（首响分布/超时占比 + dashboard 平台维度） | F1 | —（可先行开发） | 1.5–2 | [x] 已交付（2026-08-29 真实库演练通过） |
 | TIK-026 | 回复率跌破 85% 企微告警 | F2 | TIK-025 | 1 | [ ] |
-| TIK-027 | 扩量至 4 家真实店铺（Phase 3 出口） | F3 | TIK-024 稳定、TIK-025/026 | 0.5 + 稳定期 | [ ] |
+| TIK-027 | 扩量至 4 家真实店铺（原 Phase 3 出口） | F3 | TIK-024 稳定、TIK-025/026 | 0.5 + 稳定期 | [!] 已取消（2026-08-29：口径调整，仅监督 1 店，不扩量） |
 
 > \* TIK-008 逻辑上独立，按 PLAN 批次约束挂在 A2 之后；若 A2 阻塞可先行开工（注意与 TIK-005 无冲突）。
 
@@ -318,11 +318,14 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 ## 批次 E（Phase 2 收尾——上线前加固，2026-08-29 立项）
 
 > 对齐 PLAN §7。Phase 2 的前置项已随 Phase 1 顺手交付（店铺级代理字段、发送最小随机间隔、在线手动发送、登录保活 login_recovery、message_queue 上移 common、同名前缀精确路由 conversation_nav，见各工单 Phase 2 备注），本批次只剩**落地验证与配置类**工作，无新架构。
+>
+> **2026-08-29 口径调整：仅监督 1 家店铺后台**——TIK-019（多店并发实测）因此搁置；若后续业务恢复多店运营再启用。
 
 ### TIK-019 多店并发实测（2~4 店资源与稳定性）
 
+- **状态**：`[!]` 搁置（2026-08-29 口径调整——仅监督 1 家店铺后台，不做多店并发；若后续恢复多店运营再启用）
 - **批次**：E1 ｜ **依赖**：外部（≥2 个 TikTok 测试店账号） ｜ **预估**：1–2 人日 + 24h 观察窗口
-- **说明**：单店链路已由 TIK-018 实测通过，多店并发从未验证。本单验证：① user-data-dir（`tiktok_{shop_pk}`）多店实际不串扰；② `TIKTOK_MAX_BROWSER_INSTANCES`（默认 4）超限拒绝连接并告警生效；③ 资源水位（s5 实测 headless 单实例 ≈75MB，据此核对容器 memory limit 预留）；④ 多店快照轮询并发下的 CPU/事件循环压力。测试店不足 4 个时先做 2 店，全量 4 店并发验证并入 TIK-027。
+- **说明**：单店链路已由 TIK-018 实测通过，多店并发从未验证。本单验证：① user-data-dir（`tiktok_{shop_pk}`）多店实际不串扰；② `TIKTOK_MAX_BROWSER_INSTANCES`（默认 4）超限拒绝连接并告警生效；③ 资源水位（s5 实测 headless 单实例 ≈75MB，据此核对容器 memory limit 预留）；④ 多店快照轮询并发下的 CPU/事件循环压力。测试店不足 4 个时先做 2 店，全量 4 店并发验证并入 TIK-027（已取消，随单搁置）。
 - **涉及文件**：无新代码预期；`.env` / docker-compose 资源参数按实测微调。
 - **验收**：① ≥2 店同时连接 24h 稳定（无串扰、无告警误报漏报）；② 实例上限生效（超限店被拒 + 告警实收）；③ 内存峰值记录在案并据此定容器限额。
 
@@ -352,7 +355,7 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 ### TIK-022 部署清单落实（.env/内存/卷/灰度开关核对）
 
 - **批次**：E1 ｜ **依赖**：TIK-017 ｜ **预估**：0.5–1 人日
-- **说明**：TIK-017 部署影响清单逐项核对落实：① `.env.example` TIKTOK_* 变量齐全（SHOP_ENABLED/POLL_INTERVAL/DEBOUNCE/SEND_TIMEOUT/LOGIN_WAIT_TIMEOUT/MAX_BROWSER_INSTANCES）；② websocket 容器 memory limit 预留 4×1GB；③ `websocket_browser_data` 卷扩容（4 店 user-data-dir）；④ `TIKTOK_SHOP_ENABLED` 默认 false 语义复核（false 时 TikTok 店铺连接请求直接拒绝）。
+- **说明**：TIK-017 部署影响清单逐项核对落实（2026-08-29 口径调整为单店监督，资源按 1 店预留）：① `.env.example` TIKTOK_* 变量齐全（SHOP_ENABLED/POLL_INTERVAL/DEBOUNCE/SEND_TIMEOUT/LOGIN_WAIT_TIMEOUT/MAX_BROWSER_INSTANCES）；② websocket 容器 memory limit 预留 1×1GB（原 4×1GB 为 4 店口径，已随单店监督收窄）；③ `websocket_browser_data` 卷按单店 user-data-dir 预留；④ `TIKTOK_SHOP_ENABLED` 默认 false 语义复核（false 时 TikTok 店铺连接请求直接拒绝）。
 - **涉及文件**：`.env.example`、docker-compose 配置。
 - **验收**：① 部署配置逐项核对通过；② 空配置启动冒烟（默认值读取正确）；③ 灰度开关 false/true 行为各验证一次。
 
@@ -391,21 +394,36 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 
 ## 批次 F（Phase 3——真实店铺灰度 + 回复率监控，2026-08-29 立项）
 
-> 对齐 PLAN §8。Phase 3 出口标准：4 家真实店铺稳定运行，24h 回复率 ≥85%。
+> 对齐 PLAN §8。**Phase 3 出口标准（2026-08-29 口径调整）：1 家真实店铺稳定运行，24h 回复率 ≥85%。**
+> 原「扩量至 4 店」的出口（TIK-027）已随口径调整取消，TIK-019 多店并发实测同步搁置。
 
 ### TIK-024 首家真实店铺灰度接入（含转人工关键词配置）
 
-- **批次**：F1 ｜ **依赖**：批次 E 全部；外部（真实店铺账号、生产企微群） ｜ **预估**：0.5 人日配置 + 1–2 周观察
+- **批次**：F1 ｜ **依赖**：批次 E 其余（TIK-019 已搁置）；外部（真实店铺账号、生产企微群） ｜ **预估**：0.5 人日配置 + 1–2 周观察
 - **说明**：PLAN §8。灰度先 1 家：`TIKTOK_SHOP_ENABLED=true` + 单店启用。同步补 TIK-018 遗留项——生产店必须配置转人工关键词（测试店 `pdd_transfer_keyword` 为空导致「转人工」命中默认回复）。观察期内人工对账（TIK-021 流程）+ 告警演练各一次。
 - **涉及文件**：无代码改动预期；店铺配置（启用状态/营业时间/转人工关键词/风控规则）。
 - **验收**：① 稳定运行 2 周（无漏回、告警及时、对账一致）；② 转人工关键词命中验证（不再落默认回复）；③ 观察期对账与告警演练记录留存。
 
 ### TIK-025 回复率统计（首响分布/超时占比 + dashboard 平台维度）
 
+- **状态**：`[x]` 已交付并关单（2026-08-29 真实库演练通过，验收 ①②③ 全过）
 - **批次**：F1 ｜ **依赖**：—（可先行开发，真实数据随 TIK-024 积累） ｜ **预估**：1.5–2 人日
-- **说明**：PLAN §8。基于 chat_message/message_log 统计 TikTok 店铺「首响时长分布、超 5 分钟占比」；backend 统计查询接口 + dashboard 前端加平台维度筛选。首响口径对齐 TIK-018 验收统计（复用 `tools/tiktok_acceptance/latency.py` 纯函数，必要时上移 common 供 backend 复用）。
-- **涉及文件**：backend 统计服务/路由（新）；frontend dashboard 页面；`tools/tiktok_acceptance/latency.py`（口径复用/上移）。
+- **说明**：PLAN §8。基于 chat_message 统计「首响时长分布、超 5 分钟占比、回复率」，支持平台 / 店铺 / 日期三个维度；backend 新接口 + 数据分析页新增首响统计区块。首响口径与 TIK-018 对账工具共用同一份纯函数（`tools/tiktok_acceptance/latency.py` 上移 `common/utils/latency.py`）。
+- **涉及文件**：新增 `common/utils/latency.py`（原 tools 版上移 + 分布/回复率）、`backend/app/services/first_response_service.py`、`backend/app/api/routes/dashboard.py` 新增 `GET /dashboard/first-response`、`backend/tests/test_first_response_api.py`；前端 `frontend/src/pages/data_analysis.vue`、`frontend/src/api/dashboard_api.js`、新增 `frontend/src/config/platforms.js`；验收演练 `tools/tiktok_acceptance/first_response_drill.py` + `tools/tests/test_first_response_drill.py`。
 - **验收**：① dashboard 可按平台/店铺查看首响分布与超 5 分钟占比；② 与 reconcile.py 抽查口径一致；③ backend/frontend 存量测试回归全绿。
+- **交付与实测记录（2026-08-29）**：
+  1. **口径上移 common**：`tools/tiktok_acceptance/latency.py` → `common/utils/latency.py`（backend 不应依赖 tools 包），新增 `latency_distribution()`（默认 5 桶：30 秒内 / 30–60 秒 / 1–3 分钟 / 3–5 分钟 / 超 5 分钟，左闭右开、末桶无上界）与 `reply_rate()`；对账工具 `reconcile.py` 改为从 common 导入，两份统计从此共用同一实现。测试文件随迁至 `common/tests/test_latency.py`。
+  2. **回复率口径（已与用户确认）**：`回复率 =（已回复 − 超时）/（已回复 + 待回复）`——**窗口结束仍待回复的周期计未达标**（计入分母），对齐 Phase 3 出口「24h 回复率 ≥85%」，TIK-026 告警直接复用 `reply_rate()`，保证「看板看到的」与「告警判的」是同一个数。无任何周期时返回 `None`（无数据，不判 0 也不判 1）。
+  3. **接口**：`GET /api/v1/dashboard/first-response`（`dashboard` 资源 view 权限 + 数据范围隔离），参数 `start_date / end_date / platform / shop_pk`；返回 `{summary, distribution, shops}`——summary 含均值/P50/P90/最长/超时占比/回复率，shops 为分店铺明细（带 shop_name 与 platform）。日期解析与可见店铺范围复用 `dashboard_service` 的既有函数（该三处私有函数改为公开命名供复用）；时间范围上限 92 天（消息按行读入内存聚合）。
+  4. **前端（已与用户确认落在既有「数据分析」页）**：`data_analysis.vue` 在趋势图下方新增首响统计区块——平台 / 店铺下拉（与日期共用一套筛选，一次查询刷新两块数据）、6 张指标卡（回复率 / 已回复周期 / 待回复周期 / 超 5 分钟占比 / P50 / P90）、内联 SVG 分布柱状图（末桶高亮）、分店铺明细表。平台枚举抽到 `frontend/src/config/platforms.js`，店铺管理页改为复用同一份。
+  5. **验收 ①② 实测（真实库驱动）**：新增 `tools/tiktok_acceptance/first_response_drill.py`——**只读**（仅查 `pdd_chat_message` / `pdd_shop` / `sys_user` / `sys_role`，不写任何表）、**无对外副作用**（不拉浏览器、不发消息、不发企微），统计走 backend 真实服务函数（与线上接口同一实现），再与 `reconcile.py` 同窗口同店铺算一遍做 8 项口径抽查。实测（TikTok 测试店 `shop_pk=1`／`18023103936`）：
+     - 7 天窗口 2026-08-23~08-29：已回复 115 个周期、待回复 0、超时 1（0.9%）、**回复率 99.1%**、平均 8.52s、P50 0s、P90 4s、最长 760s；分布 `30 秒内 112 / 30–60 秒 0 / 1–3 分钟 2 / 3–5 分钟 0 / 超 5 分钟 1`；
+     - 单日窗口 + `platform=tiktok`：已回复 80、超时 1（1.2%）、回复率 98.8%、平均 11.90s；
+     - 平台错配（店铺为 tiktok、按 pdd 查）→ 拒绝并返回「店铺不存在或无访问权限」；
+     - **8 项口径抽查（responded / pending / pending_conversations / over_threshold_count / over_threshold_ratio / mean / p50 / p90）backend 与 reconcile 全部一致，退出码 0**。
+  6. **单测**：新增 `backend/tests/test_first_response_api.py` 14 例（平台/店铺筛选、分布桶左闭右开、末桶=超时计数、回复率含待回复、空窗口返回 None、数据范围隔离、非法平台/日期/超长范围/越权店铺拒绝、HTTP 层无权限拒绝）；`common/tests/test_latency.py` 补 9 例（分布与回复率）；`tools/tests/test_first_response_drill.py` 6 例（演练一致性、分布与店铺行、文本渲染、平台错配 / 无管理员 / 店铺不存在三个失败路径）。
+  7. **回归**：backend 251（基线 237 → 251）、websocket 352、scheduler 37、common 55（基线 35 → 55，含随模块迁入的 20 例 latency 单测）、tools 29（迁出 11 例 + 新增 6 例）；前端 `npm run build` 通过（`data_analysis` chunk 10.82 kB）。
+- **遗留（不阻塞关单）**：① 统计按行读入窗口内消息后内存聚合，单店 24h 无压力，若后期单窗口消息量到十万级需改为 SQL 侧预聚合；② dashboard 页面未在浏览器中人工目视验收（本次按用户偏好以「真实链路 + 真实库驱动」验证统计侧，HTTP 接口层由 TestClient 覆盖）。
 
 ### TIK-026 回复率跌破 85% 企微告警
 
@@ -414,11 +432,11 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 - **涉及文件**：scheduler 任务（新）；告警走现有链路，零新增服务。
 - **验收**：① 模拟低回复率触发告警、企微实收；② 静默窗口去重 + 恢复后再告警；③ 正常水位无误报。
 
-### TIK-027 扩量至 4 家真实店铺（Phase 3 出口）
+### TIK-027 扩量至 4 家真实店铺（原 Phase 3 出口）
 
+- **状态**：`[!]` 已取消（2026-08-29 口径调整——仅监督 1 家店铺后台，不扩量；若后续业务恢复多店运营再恢复本单）
 - **批次**：F3 ｜ **依赖**：TIK-024 稳定运行、TIK-025/026 ｜ **预估**：0.5 人日 + 稳定期
-- **说明**：PLAN §8 Phase 3 出口。灰度 1→4 家（若 TIK-019 未做满 4 店，本单一并补齐全量多店并发验证）；每店过配置清单（营业时间/转人工关键词/风控规则/代理）。
-- **验收**：① 4 店稳定运行；② 24h 回复率 ≥85%（dashboard 可查、TIK-026 告警全程可用）；③ 对账一致。
+- **说明**：原 PLAN §8 Phase 3 出口为灰度 1→4 家，每店过配置清单（营业时间/转人工关键词/风控规则/代理）。取消后无验收项。
 
 ### 远期候选（不设工单号，方向储备）
 

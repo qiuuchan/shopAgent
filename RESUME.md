@@ -21,7 +21,8 @@
 - **工具调用经 `asyncio.to_thread` 线程池**执行同步 DB 检索避免阻塞事件循环；注入店铺隔离参数覆盖模型可能给错的 `shop_id` 保证数据隔离；jieba 中文分词检索商品/客服知识库
 - **多模型供应商适配**（4 类协议：OpenAI 兼容 / Anthropic / Gemini / DashScope），仅依赖标准库 urllib，纯函数与网络分离便于单测，Gemini 经 header 传 key 防日志泄漏
 - **TikTok RPA 通道工程化**：同步签名桥接主循环（`run_coroutine_threadsafe`）+ `asyncio.Lock` 串行化防同店并发 + 成功检测（`wait_for_selector` 己方气泡）+ 频率断路器（45–120s 随机节流降风控）+ human-like 输入 + 企微告警链路
-- **600+ pytest 用例**（common/backend/websocket/scheduler 四服务）全绿，Hypothesis 属性测试（`max_examples=200`）+ 内存 SQLite 隔离 + mock 服务间调用；二开期间修复 Flaky 与发送器资源泄漏
+- **695 个 pytest 用例**（common/backend/websocket/scheduler 四服务）全绿，Hypothesis 属性测试（`max_examples=200`）+ 内存 SQLite 隔离 + mock 服务间调用；二开期间修复 Flaky 与发送器资源泄漏
+- **回复率统计看板（TIK-025）**：按平台/店铺/日期三维度统计首响时长分布、超 5 分钟占比与回复率；首响口径抽为 `common` 纯函数，对账工具、统计接口、跌破阈值告警三处共用同一实现（口径唯一来源），验收以「真实库 + 真实统计服务」演练并逐项与对账工具抽查一致
 
 ---
 
@@ -30,7 +31,7 @@
 | 维度 | 数据 |
 | --- | --- |
 | 服务拆分 | 4 后端微服务（common 公共库 + backend API + websocket 长连接 + scheduler 定时）+ Vue3 前端 |
-| 测试用例 | **657 个**（common 35 / backend 237 / websocket 352 / scheduler 33），重跑全绿 |
+| 测试用例 | **695 个**（common 55 / backend 251 / websocket 352 / scheduler 37；另 tools 29），重跑全绿 |
 | 属性测试 | Hypothesis `max_examples=200`，内存 SQLite + `@compiles(BigInteger,"sqlite")` 适配，不依赖真实 MySQL/Redis |
 | TikTok 通道 | 8 模块（channel/login/sender/session/selectors/guard/recovery/message），单文件 ≤500 行 |
 | LLM 协议适配 | 4 类（OpenAI 兼容 / Anthropic / Gemini / DashScope） |

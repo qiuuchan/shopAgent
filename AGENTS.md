@@ -39,7 +39,8 @@ pdd-auto-reply/
 │   ├── schemas/             #   统一响应体(common.py)、输入清洗(sanitize.py)
 │   ├── services/            #   字典服务、AI 供应商、知识库、管理员种子、服务间客户端
 │   └── utils/               #   加解密(crypto.py)、安全(security.py)、分页、北京时间、
-│                            #   星期/营业时间判定(weekdays.py/business_hours.py)
+│                            #   星期/营业时间判定(weekdays.py/business_hours.py)、
+│                            #   首响时长统计纯函数(latency.py，TIK-025 由 tools 上移)
 ├── backend/                 # HTTP API 服务（8089）
 │   ├── app/api/routes/      #   REST 路由（auth/users/roles/shops/keywords/replies/
 │   │                        #   ai_config/knowledge/risk_control/chat/... 共 28 个域）
