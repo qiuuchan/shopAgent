@@ -61,7 +61,7 @@ DATE_FORMAT: str = "%Y-%m-%d"
 # ----------------------------------------------------------------------
 # 数据范围辅助：解析当前用户可见店铺主键集合（需求 3.7）
 # ----------------------------------------------------------------------
-def _visible_shop_ids(session: Session, user: SysUser) -> Optional[List[int]]:
+def visible_shop_ids(session: Session, user: SysUser) -> Optional[List[int]]:
     """解析当前用户数据范围内的店铺主键集合（需求 3.7）。
 
     管理员可见全部店铺，返回 None 表示「不附加店铺范围限制」；非管理员返回其本人
@@ -178,7 +178,7 @@ def get_overview(session: Session, user: SysUser) -> ApiResponse:
     Returns:
         统一响应体：data 为关键指标字典。
     """
-    shop_ids = _visible_shop_ids(session, user)
+    shop_ids = visible_shop_ids(session, user)
     today_start, tomorrow_start = _today_range()
 
     online_shops = _count_online_shops(session, shop_ids)
@@ -230,7 +230,7 @@ def get_overview(session: Session, user: SysUser) -> ApiResponse:
 # ----------------------------------------------------------------------
 # 数据分析趋势（需求 20.2 / 20.3）
 # ----------------------------------------------------------------------
-def _parse_date(value: Optional[str]) -> tuple[bool, Optional[datetime]]:
+def parse_date(value: Optional[str]) -> tuple[bool, Optional[datetime]]:
     """将 ``YYYY-MM-DD`` 日期字符串解析为北京时间零点朴素 datetime。
 
     Args:
@@ -251,7 +251,7 @@ def _parse_date(value: Optional[str]) -> tuple[bool, Optional[datetime]]:
     return True, parsed.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _resolve_trend_range(
+def resolve_trend_range(
     start_date: Optional[str], end_date: Optional[str]
 ) -> tuple[Optional[ApiResponse], Optional[datetime], Optional[datetime]]:
     """解析并校验趋势统计的起止日期区间（北京时间自然日）。
@@ -269,10 +269,10 @@ def _resolve_trend_range(
     Returns:
         三元组 (错误响应, 起始零点, 结束零点)。校验通过时第一项为 None。
     """
-    start_ok, start_dt = _parse_date(start_date)
+    start_ok, start_dt = parse_date(start_date)
     if not start_ok:
         return error_response(CODE_PARAM_ERROR, "起始日期格式应为 YYYY-MM-DD"), None, None
-    end_ok, end_dt = _parse_date(end_date)
+    end_ok, end_dt = parse_date(end_date)
     if not end_ok:
         return error_response(CODE_PARAM_ERROR, "结束日期格式应为 YYYY-MM-DD"), None, None
 
@@ -385,11 +385,11 @@ def get_trend(
     Returns:
         统一响应体：data 含 {start_date, end_date, points:[{date, messages, replies}]}。
     """
-    error, start_dt, end_dt = _resolve_trend_range(start_date, end_date)
+    error, start_dt, end_dt = resolve_trend_range(start_date, end_date)
     if error is not None:
         return error
 
-    shop_ids = _visible_shop_ids(session, user)
+    shop_ids = visible_shop_ids(session, user)
     # 聚合区间为 [start_dt, end_dt 次日 00:00)，确保包含结束日全天。
     end_exclusive = end_dt + timedelta(days=1)
 
