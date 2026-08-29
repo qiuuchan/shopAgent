@@ -30,7 +30,7 @@
 | 维度 | 数据 |
 | --- | --- |
 | 服务拆分 | 4 后端微服务（common 公共库 + backend API + websocket 长连接 + scheduler 定时）+ Vue3 前端 |
-| 测试用例 | **624 个**（common 35 / backend 237 / websocket 319 / scheduler 33），重跑全绿 |
+| 测试用例 | **657 个**（common 35 / backend 237 / websocket 352 / scheduler 33），重跑全绿 |
 | 属性测试 | Hypothesis `max_examples=200`，内存 SQLite + `@compiles(BigInteger,"sqlite")` 适配，不依赖真实 MySQL/Redis |
 | TikTok 通道 | 8 模块（channel/login/sender/session/selectors/guard/recovery/message），单文件 ≤500 行 |
 | LLM 协议适配 | 4 类（OpenAI 兼容 / Anthropic / Gemini / DashScope） |
@@ -135,7 +135,7 @@
 | 工具调用 / Function Calling | OpenAI function schema + TOOL_REGISTRY + 店铺隔离参数注入 + 缺参中文提示 |
 | 安全与护栏 | JWT 黑名单 + Fernet 加密 + 参数化 SQL + 密钥防泄漏 + RBAC 权限模块 |
 | 工程化部署 | Docker Compose 6 服务 + 健康检查 + 滚动更新 + MySQL/Redis + CI/CD 脚本 |
-| 测试与工程质量 | 624 用例 + Hypothesis 属性测试 + 内存 SQLite 隔离全绿（满足"可展示的完整 Agent 项目案例"直接要求） |
+| 测试与工程质量 | 657 用例 + Hypothesis 属性测试 + 内存 SQLite 隔离全绿（满足"可展示的完整 Agent 项目案例"直接要求） |
 
 ### 部分匹配（可讲、但别吹过头）
 - **RAG**：jieba 关键词 + goods_id 精确匹配，缺向量检索/Embedding/混合检索/重排
@@ -161,9 +161,10 @@ python -m venv .venv
 .venv/Scripts/pip install -e "common[test]" -e "backend[test]" -e "websocket[test]" -e "scheduler[test]"
 
 cd common     && ../.venv/Scripts/python -m pytest     # 35 用例
-cd backend    && ../.venv/Scripts/python -m pytest     # 234 用例
-cd websocket  && ../.venv/Scripts/python -m pytest     # 299 用例
+cd backend    && ../.venv/Scripts/python -m pytest     # 237 用例
+cd websocket  && ../.venv/Scripts/python -m pytest     # 352 用例
 cd scheduler  && ../.venv/Scripts/python -m pytest     # 33 用例
+cd tools      && ../.venv/Scripts/python -m pytest tests  # 验收工具用例（TIK-018/TIK-020）
 ```
 
 测试用内存 SQLite，不依赖真实 MySQL/Redis；Windows 需 `pip install tzdata`，bcrypt 需 pin `<4.1`（passlib 1.7.4 兼容）。
