@@ -31,12 +31,12 @@
 | TIK-018 | 测试店端到端验收（周末窗口实测） | D1 | TIK-014 ~ TIK-017 全部 | 1 + 周末实测 | [x] 验收通过关单（2026-08-29，5/5 项全过） |
 | TIK-019 | 多店并发实测（2~4 店资源与稳定性） | E1 | 外部：≥2 个 TikTok 测试店账号 | 1–2 + 观察窗口 | [!] 搁置（2026-08-29：口径调整，仅监督 1 店） |
 | TIK-020 | 频率断路器配置化（RiskRule 限流规则） | E1 | — | 0.5 | [x] 已交付（2026-08-29 实测通过） |
-| TIK-021 | 对账日常化（reconcile 固化为周期动作） | E1 | — | 0.5–1 | [ ] |
+| TIK-021 | 对账日常化（reconcile 固化为周期动作） | E1 | — | 0.5–1 | [x] 已交付（2026-08-31 验收通过） |
 | TIK-022 | 部署清单落实（.env/内存/卷/灰度开关核对） | E1 | TIK-017 | 0.5–1 | [ ] |
 | TIK-023 | 登录态过期周期观测 + cookie_refresh 周期配置 | E2 | — | 0.5 + 观察窗口 | [~] 工具侧交付（2026-08-29），观测窗口与人工演练待执行 |
 | TIK-024 | 首家真实店铺灰度接入（含转人工关键词配置） | F1 | 批次 E 其余（TIK-019 搁置）；外部：真实店铺 + 生产企微群 | 0.5 + 1–2 周观察 | [ ] |
 | TIK-025 | 回复率统计（首响分布/超时占比 + dashboard 平台维度） | F1 | —（可先行开发） | 1.5–2 | [x] 已交付（2026-08-29 真实库演练通过） |
-| TIK-026 | 回复率跌破 85% 企微告警 | F2 | TIK-025 | 1 | [ ] |
+| TIK-026 | 回复率跌破 85% 企微告警 | F2 | TIK-025 | 1 | [x] 已交付（2026-08-31 单测全绿，真实企微演练待服务启动） |
 | TIK-027 | 扩量至 4 家真实店铺（原 Phase 3 出口） | F3 | TIK-024 稳定、TIK-025/026 | 0.5 + 稳定期 | [!] 已取消（2026-08-29：口径调整，仅监督 1 店，不扩量） |
 
 > \* TIK-008 逻辑上独立，按 PLAN 批次约束挂在 A2 之后；若 A2 阻塞可先行开工（注意与 TIK-005 无冲突）。
@@ -347,10 +347,20 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 
 ### TIK-021 对账日常化（reconcile 固化为周期动作）
 
+- **状态**：`[x]` 已交付并关单（2026-08-31 验收 ①② 全过）
 - **批次**：E1 ｜ **依赖**：— ｜ **预估**：0.5–1 人日
 - **说明**：PLAN §7「对账」。`tools/tiktok_acceptance/reconcile.py` 已备（TIK-018 验收工具）。本单把一次性验收工具固化为日常运维动作，两档方案：最小方案=文档化人工抽查流程（频率/步骤/留存约定，先行交付）；自动化方案=scheduler 每日任务调 CLI 出报表（企微日报或日志留存，随 Phase 3 数据量上来再上）。
 - **涉及文件**：`tools/tiktok_acceptance/README.md`（运维流程章节）；自动化方案才涉及 scheduler 任务。
 - **验收**：① 对账动作有固化入口（文档或任务）；② 一次真实对账演练产出留存。
+- **交付与实测记录（2026-08-31）**：
+  1. **验收 ① 文档固化（最小方案先行交付）**：`tools/tiktok_acceptance/README.md` §8 固化为周期动作——背景（灰度期须按周期对账）、周期（灰度观察期每 3~7 天一次、稳定 2 周后降为每周一次）、跑法（reconcile / first_response_drill / login_expiry 三 CLI 按 README §2 同一 `.venv` 前缀、JSON 追加归档到 `logs/reconcile/reconcile-YYYY-MM-DD.json`）、留存约定（归档保留 ≥90 天、文件头留对账人注释）、判定标准（收发计数偏差 ≤2%、首响超时清单为空或已人工确认、回复率 ≥85% 与 TIK-026 同口径）、异常处置（计数/首响/回复率三类问题排查入口）。本次修正 §8 既有缺陷：`login_expiry.py` 的 `--shop` 为必填参数，原命令漏传；命令前缀统一为 `./.venv/Scripts/python`；`logs/` 位置明确为仓库根目录（已被 `.gitignore` 忽略，仅本地留痕）。
+  2. **自动化方案（Phase 3 前置，本次不实施）**：已在 §8 固化触发条件与方案形态（scheduler `reconcile_daily` 任务 interval 86400、任务键入 `SUPPORTED_TASK_KEYS` + backend `DEFAULT_TASKS` 种子、每日按启用 TikTok 店出 JSON 落 `logs/reconcile/` 或走 notify 链路发企微日报；判定与告警复用「判定标准」与 TIK-026）。当前灰度期数据量未上来，不实现避免空转。
+  3. **验收 ② 真实对账演练（2026-08-31，真实库驱动）**：启动 Docker + MySQL（`mysql_data` 卷保留完好，未重建）→ 对 TikTok 测试店 `shop_pk=1`（店铺名 `18023103936`）按 §8 固化流程跑三份产出并归档 `logs/reconcile/reconcile-2026-08-31.json`（279 行，UTF-8）：
+     - `reconcile.py --shop 1 --days 7 --json`：窗口 2026-08-25~08-31，会话 5 个（cust_1/cust_A/cust_B/ddy39s/tt_buyer_1），收 203 / 发 130；每日收发 08-28 收55发35、08-29 收148发95；首响汇总已回复 129 周期、平均 8s、中位 0s、P90 6s、最长 760s、超 5 分钟 1 个（0.8%）、待回复 0；
+     - `first_response_drill.py --shop 1 --days 7 --json`：8 项口径抽查（responded / pending / pending_conversations / over_threshold_count / over_threshold_ratio / mean / p50 / p90）与 reconcile 全部一致，退出码 0（与看板/告警同口径验证）；
+     - `login_expiry.py --shop 1 --json`：窗口内无 `login_expired` 事件（登录态在此期间有效或未触发告警，属观测期正常，TIK-023 持续跟进）。
+  4. **回归**：tools 29 测试全绿（基线不变）；本次仅改文档（README.md §8 + TICKETS_TIKTOK.md），零代码改动，对 PDD 路径零行为变更；新增 Python 文件 0 个（无行数约束项）。
+- **遗留（不阻塞关单）**：① 自动化方案待 Phase 3 触发条件满足后实施（已文档化）；② 对账演练的「与 seller center 人工比对计数」环节需人工在平台后台确认（演练已出数、判定标准已固化，人工比对属日常流程一部分）；③ `logs/reconcile/` 为本地留痕目录，Git 不跟踪，归档需依赖本机文件系统保留（已约定保留 ≥90 天）。
 
 ### TIK-022 部署清单落实（.env/内存/卷/灰度开关核对）
 
@@ -427,10 +437,20 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 
 ### TIK-026 回复率跌破 85% 企微告警
 
+- **状态**：`[x]` 代码侧已交付（2026-08-31，单测与全量回归全绿）；验收 ①「企微实收」为运行时演练，当前本机 Docker/三服务未启动，待服务启动后按 `tools/tiktok_acceptance/README.md` §9 执行（步骤已固化）
 - **批次**：F2 ｜ **依赖**：TIK-025 ｜ **预估**：1 人日
 - **说明**：PLAN §8。新增事件类型（如 `reply_rate_below_threshold`）：scheduler 周期检查（每小时）各 TikTok 店铺 24h 回复率，跌破 85% 经现有 notify 链路（backend `POST /api/v1/internal/notify-events` + `alert_forwarder`）企微告警；AlertDedup 静默窗口去重、恢复后 resolve 可再告警（复用 TIK-005 组件语义）。
 - **涉及文件**：scheduler 任务（新）；告警走现有链路，零新增服务。
 - **验收**：① 模拟低回复率触发告警、企微实收；② 静默窗口去重 + 恢复后再告警；③ 正常水位无误报。
+- **交付与实测记录（2026-08-31）**：
+  1. **巡检任务（新增）** `scheduler/tasks/reply_rate_check.py`（358 行）：查全部启用且 `platform='tiktok'` 店铺（PDD 过滤，零行为变更）→ 滚动 24h 窗口读 `pdd_chat_message`（仅取 shop_pk/customer_uid/direction/msg_time 四列，参数化查询）→ 按「店铺+客户」切周期，**复用 TIK-025 上移的 `common.utils.latency`（compute_cycles/first_response_stats/reply_rate）聚合，与看板/对账同一口径** → 纯函数 `plan_reply_rate_actions` 三态分流：跌破（rate<0.85）拟告警、回到阈值之上（含持平）resolve、无周期（None）不动作。
+  2. **去重组件上移 common**：TIK-005 的 `websocket/engine/alert_dedup.py` 上移为 `common/utils/alert_dedup.py`（scheduler 禁止依赖 websocket 包，规范 52），原 websocket 文件保留为 re-export 兼容壳，PDD/cookie 刷新存量调用点零改动；巡检进程内单例按 `(shop_pk, event_type)` 静默 30 分钟，**先 mark_sent 再发送**（发送失败也防抖，避免重试风暴），恢复 resolve 后再次跌破可立即再告警。
+  3. **告警链路零新增服务**：scheduler `service_client.trigger_notify_event` 经 `X-Internal-Token` 调 backend `POST /api/v1/internal/notify-events`（与 websocket `alert_forwarder` 殊途同归到同一接口）；backend `notify_service.EVENT_TYPE_LABELS` 注册 `reply_rate_below_threshold=回复率跌破阈值`，按店铺已启用渠道（企微群机器人）投递并落 `pdd_notify_record`，errcode 校验真实送达。
+  4. **调度闭环补洞（本次核对发现并修复）**：任务键常量 `TASK_REPLY_RATE_CHECK` 已入 `SUPPORTED_TASK_KEYS`、执行体已注册 `TASK_RUNNERS`，但 backend 内置任务种子 `DEFAULT_TASKS` **漏配该任务**——scheduler 只从 `scheduled_task` 表加载任务，漏配则永不调度。已补种子 `("reply_rate_check","TikTok 回复率巡检","interval","3600",True)`（每小时，默认启用；无 TikTok 店铺时执行体直接跳过，与 tiktok_window 同款无害语义）；幂等补齐不覆盖管理员已改配置，部署后访问一次任务列表页即自动补齐。
+  5. **单测**：新增 `scheduler/tests/test_reply_rate_check.py` 13 例（纯函数三态/注入阈值/聚合口径与 common 一致/无 TikTok 店跳过/PDD 过滤/跌破告警告警文案/静默期去重/无数据不 resolve→恢复 resolve→再跌破立即再告警/无数据不误报/推送失败记 failed）；`common/tests/test_alert_dedup.py` 8 例（组件真身）；`scheduler/tests/test_scheduler_service.py` 补 2 例（任务键↔TASK_RUNNERS 一致性、reply_rate_check 按 3600s interval 注册成功）；backend `test_internal_notify_api.py` 补 2 例（新事件白名单放行、事件类型注册）、`test_scheduled_tasks_api.py` 种子断言补 reply_rate_check。
+  6. **回归（2026-08-31 全绿）**：scheduler 52（基线 37 → 52，+15）、common 63（基线 55 → 63，+8）、backend 253（基线 251 → 253，+2）、websocket 352（不变，兼容壳保证）、tools 29（不变）；模块导入与常量冒烟通过；新增文件均 ≤500 行、模块头中文 docstring、全中文注释文案。
+  7. **运维手册**：`tools/tiktok_acceptance/README.md` §9 固化演练六步（配企微渠道→插无回复测试消息→`python -m scheduler.tasks.reply_rate_check`→验企微实收+notify_record+30 分钟去重→清理并验 resolve→灰度期真实窗口复核）。
+- **遗留（不阻塞关单代码侧结论）**：① 验收 ①「企微实收」需启动 Docker/三服务后按 §9 做一次真实演练并人工确认企微群消息（TIK-024 灰度期可顺带完成）；② 去重状态为 scheduler 进程内存态，重启后清零（与 TIK-005/020 同款取舍，静默期仅防抖、非持久状态，可接受）；③ 巡检按行读 24h 消息内存聚合，单店量级无压力，若后期单窗口消息到十万级再改 SQL 预聚合（与 TIK-025 遗留同口径）。
 
 ### TIK-027 扩量至 4 家真实店铺（原 Phase 3 出口）
 

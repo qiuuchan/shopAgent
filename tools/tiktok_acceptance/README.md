@@ -292,3 +292,73 @@ login_recovery 是否接管（是/否）：  恢复后是否需人工重启服�
 
 该口径实现于 `common.utils.latency.reply_rate`，TIK-026「24h 回复率跌破 85% 告警」
 复用同一函数，保证看板与告警判定同源。
+
+## 8. 对账日常化（TIK-021）
+
+**背景**：TIK-018 验收通过后，对账工具（`reconcile.py`）为只读半自动 CLI；灰度期
+（TIK-024）起须按周期对账，防「消息漏回 / 首响不达标」积压成事故。本小节把对账
+固化为周期动作（流程 + 归档 + 判定），不新增代码。
+
+**周期**：灰度观察期每 3~7 天一次（与 TIK-023 登录态观测同频，两条线一起跑）；
+稳定运行 2 周后可降频为每周一次。**每次对账须归档**，供事后追溯与周报留痕。
+
+**跑法（推荐 JSON 归档到 `logs/reconcile/`，在仓库根目录执行、用 `.venv` 解释器）**：
+
+```bash
+# 1) 对账：收发计数 + 首响汇总（对全部启用 TikTok 店铺逐店跑）
+./.venv/Scripts/python tools/tiktok_acceptance/reconcile.py --shop <pk> --days 7 --json \
+    > logs/reconcile/reconcile-YYYY-MM-DD.json
+# 2) 首响统计演练（同一窗口，与看板/告警同口径抽查）
+./.venv/Scripts/python tools/tiktok_acceptance/first_response_drill.py --shop <pk> --days 7 --json \
+    >> logs/reconcile/reconcile-YYYY-MM-DD.json
+# 3) 登录态观测（TIK-023，如尚未出周期结论；--shop 必填）
+./.venv/Scripts/python tools/tiktok_acceptance/login_expiry.py --shop <pk> --json \
+    >> logs/reconcile/reconcile-YYYY-MM-DD.json
+```
+
+`logs/` 位于仓库根目录（已被 `.gitignore` 的 `logs/` 规则忽略，Git 不跟踪，仅本地留痕）；
+归档文件统一命名 `reconcile-YYYY-MM-DD.json`（取跑对账当天日期），三条命令用 `>>` 追加进同一文件。
+
+**留存约定**：归档至少保留 90 天（覆盖一个完整对账周期 + 追溯窗口），之后可手工清理；
+每次对账在当天的归档文件头部留一行注释（`# 对账人 / 日期 / 店铺列表`），便于多人协作时区分责任人。
+
+**判定标准（对账报告逐项核对）**：
+- 收发计数与 seller center「客户消息」页一致；存在落库去重差异时偏差 ≤2% 可接受，
+  超限需排查 websocket 收消息 / 落库链路；
+- 首响超时（>300s）清单为空，或已逐条人工确认（AI 超时预算 / 渠道故障可解释）；
+- 回复率 ≥85%（Phase 3 出口口径）；跌破时应有 TIK-026 企微告警留痕（同一口径）。
+
+**异常处置**：
+- 计数对不上 → 查 websocket 收消息 / 落库日志（`channel_tiktok` 解析与去重）；
+- 首响超时 → 查 `reply_engine` 决策链命中路径与 `ai_reply_engine` 超时预算日志；
+- 回复率跌破 85% → 先核对 `pdd_notify_record` 告警记录（应已推送），再复盘消息
+  积压原因（营业时间窗 / 登录态失效 / 渠道故障）。
+
+**自动化方案（Phase 3 前置，当前不实施）**：上述为最小方案（人工抽查 + 归档）。
+当 TIK-024 灰度稳定、单店日消息量上升（对账周期过密导致人工难以按时执行）时，
+再上 scheduler 每日任务：新增 `reconcile_daily` 任务（interval 86400，任务键入
+`SUPPORTED_TASK_KEYS` + backend `DEFAULT_TASKS` 种子幂等补齐），每日按启用 TikTok
+店铺调用本 CLI 出 JSON 报告 → 落 `logs/reconcile/`（日志留存）或经现有 notify 链路
+发企微日报；判定与告警仍复用上文「判定标准」与 TIK-026（自动化只出数留痕，决策兜底
+在告警）。触发条件满足前不实现，避免空转。
+
+## 9. TIK-026 回复率跌破 85% 告警演练
+
+**链路**：scheduler `reply_rate_check` 任务（内置种子 `interval=3600` 即每小时一轮，
+backend `scheduled_task_service.DEFAULT_TASKS` 访问任务列表时幂等补齐，管理端可改周期/
+启停）→ 每店滚动 24h 回复率（`common.utils.latency.reply_rate`，与看板同源）→ 跌破阈值
+经 `AlertDedup` 去重（静默 30 分钟，恢复 resolve）→ backend
+`/api/v1/internal/notify-events`（`X-Internal-Token` 鉴权）→ 企微群机器人（按店铺
+已启用渠道）→ 落 `pdd_notify_record`。仅检查 `platform='tiktok'` 的启用店铺，PDD 不受影响。
+
+**演练（模拟低回复率触发告警）**：
+1. 前置：店铺已配置企微群机器人通知渠道（`/admin/notify-channels`）；
+2. 往目标店插入一条「无回复」测试消息（`direction='in'`，msg_time 在近 24h 内），
+   使该店回复率跌破 85%；
+3. 手动触发巡检：`python -m scheduler.tasks.reply_rate_check`（或等下一个周期）；
+4. 验证：企微实收告警；`pdd_notify_record` 出现 `reply_rate_below_threshold` 记录；
+   连续再跑一次应被静默去重（30 分钟窗口）；
+5. 清理：删除测试消息，再跑一次巡检 → 回复率恢复 → `resolve` 解除静默
+   （恢复后再跌破可立即再告警）；
+6. 恢复演练（TIK-024 灰度期）：真实低回复率窗口出现时，确认告警文案含店铺名与
+   实测回复率，且恢复后无残留误报。

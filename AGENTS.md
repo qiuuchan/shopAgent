@@ -129,7 +129,7 @@ bash update.sh [-y] [--no-git]   # 可选 git pull → 重建镜像 → 滚动�
 
 - **backend**：唯一对外 API。负责鉴权、CRUD、在线聊天（含 `/api/v1/chat/ws` WebSocket 实时推送）、仪表盘等。**唯一执行建表/补字段/补字典启动迁移**（`common.db.init_database.SchemaMigrator`，只增不改不删、幂等）。
 - **websocket**：按店铺维护拼多多长连接（`channel_pdd`），消息链路为 `PDDChannel 收包 → FIFO 队列（每店铺独立）→ MessageConsumer → decide_reply 决策链 → 发送回复/转人工/记日志/通知`。决策优先级（`engine/reply_engine.py`）：黑名单 → 过滤 → 非营业时间 → 风控 → 关键词 → 商品专属 → AI → 默认回复 → 无匹配。服务启动时自动拉起全部「启用」店铺连接；backend 经 HTTP（`INTERNAL_SERVICE_TOKEN` 校验）触发连接启停/发消息/登录等。
-- **scheduler**：APScheduler 后台调度器，从 `scheduled_task` 表加载启用任务（`cron` / `interval` 两种方式），任务键：`cookie_refresh` / `product_sync` / `log_file_cleanup`，执行体写 `task_run_log`。job 默认 `misfire_grace_time=3600`、`coalesce=True`、`max_instances=1`，时区 Asia/Shanghai。
+- **scheduler**：APScheduler 后台调度器，从 `scheduled_task` 表加载启用任务（`cron` / `interval` 两种方式），任务键：`cookie_refresh` / `product_sync` / `log_file_cleanup` / `tiktok_window`（TikTok 营业时间窗收敛，60s）/ `reply_rate_check`（TikTok 24h 回复率巡检，3600s，跌破 85% 企微告警，TIK-026）；内置任务由 backend `scheduled_task_service.DEFAULT_TASKS` 在访问任务列表时幂等补齐，执行体写 `task_run_log`。job 默认 `misfire_grace_time=3600`、`coalesce=True`、`max_instances=1`，时区 Asia/Shanghai。
 
 ### 数据访问与模型约定
 
