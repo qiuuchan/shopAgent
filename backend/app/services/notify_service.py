@@ -68,14 +68,17 @@ DICT_CHANNEL_TYPE: str = "channel_type"
 # 合法的通知渠道类型枚举键（与 sys_dict 的 channel_type 字典一致）。
 ALLOWED_CHANNEL_TYPES: tuple[str, ...] = ("email", "webhook", "wecom")
 
-# 系统事件类型与其中文文案（需求 18.3：连接断开 / 登录态失效 / 风控触发）。
+# 系统事件类型与其中文文案（需求 18.3：连接断开 / 登录态失效 / 风控触发；
+# TIK-026 追加回复率跌破阈值，由 scheduler 侧经 notify-events 内部接口推送）。
 EVENT_CONNECTION_DISCONNECTED: str = "connection_disconnected"
 EVENT_LOGIN_EXPIRED: str = "login_expired"
 EVENT_RISK_TRIGGERED: str = "risk_triggered"
+EVENT_REPLY_RATE_BELOW_THRESHOLD: str = "reply_rate_below_threshold"
 EVENT_TYPE_LABELS: Dict[str, str] = {
     EVENT_CONNECTION_DISCONNECTED: "连接断开",
     EVENT_LOGIN_EXPIRED: "登录态失效",
     EVENT_RISK_TRIGGERED: "风控触发",
+    EVENT_REPLY_RATE_BELOW_THRESHOLD: "回复率跌破阈值",
 }
 
 # 通知发送结果取值（写入 notify_record.send_result）。
@@ -672,6 +675,7 @@ __all__ = [
     "EVENT_CONNECTION_DISCONNECTED",
     "EVENT_LOGIN_EXPIRED",
     "EVENT_RISK_TRIGGERED",
+    "EVENT_REPLY_RATE_BELOW_THRESHOLD",
     "EVENT_TYPE_LABELS",
     "SEND_RESULT_SUCCESS",
     "SEND_RESULT_FAILED",

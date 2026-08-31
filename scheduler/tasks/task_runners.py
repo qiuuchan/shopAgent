@@ -34,11 +34,12 @@ from common.models.config_models import BusinessHours
 from common.models.shop_models import Shop
 from common.utils.business_hours import is_within_business_hours
 
-from tasks import log_cleanup, service_client, task_run_log
+from tasks import log_cleanup, reply_rate_check, service_client, task_run_log
 from tasks.constants import (
     TASK_COOKIE_REFRESH,
     TASK_LOG_FILE_CLEANUP,
     TASK_PRODUCT_SYNC,
+    TASK_REPLY_RATE_CHECK,
     TASK_TIKTOK_WINDOW,
 )
 
@@ -415,6 +416,7 @@ TASK_RUNNERS = {
     TASK_PRODUCT_SYNC: run_product_sync,
     TASK_LOG_FILE_CLEANUP: run_log_file_cleanup,
     TASK_TIKTOK_WINDOW: run_tiktok_window,
+    TASK_REPLY_RATE_CHECK: reply_rate_check.run_reply_rate_check,
 }
 
 

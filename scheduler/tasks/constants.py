@@ -25,10 +25,19 @@ TASK_LOG_FILE_CLEANUP: str = "log_file_cleanup"
 # TikTok 营业时间窗控制：周期比对 TikTok 店铺的营业时间期望态与连接实态，
 # 收敛 connect / disconnect（需求 24.x，TIK-015）。
 TASK_TIKTOK_WINDOW: str = "tiktok_window"
+# 回复率巡检：周期检查各 TikTok 店铺近 24 小时回复率，跌破阈值经 backend 内部
+# 通知接口企微告警，恢复后解除静默可再告警（Phase 3 出口，TIK-026）。
+TASK_REPLY_RATE_CHECK: str = "reply_rate_check"
 
 # 全部受支持的任务键集合（用于校验配置中的 task_key 是否可调度）。
 SUPPORTED_TASK_KEYS: frozenset[str] = frozenset(
-    {TASK_COOKIE_REFRESH, TASK_PRODUCT_SYNC, TASK_LOG_FILE_CLEANUP, TASK_TIKTOK_WINDOW}
+    {
+        TASK_COOKIE_REFRESH,
+        TASK_PRODUCT_SYNC,
+        TASK_LOG_FILE_CLEANUP,
+        TASK_TIKTOK_WINDOW,
+        TASK_REPLY_RATE_CHECK,
+    }
 )
 
 # ----------------------------------------------------------------------
@@ -53,6 +62,7 @@ __all__ = [
     "TASK_PRODUCT_SYNC",
     "TASK_LOG_FILE_CLEANUP",
     "TASK_TIKTOK_WINDOW",
+    "TASK_REPLY_RATE_CHECK",
     "SUPPORTED_TASK_KEYS",
     "SCHEDULE_TYPE_CRON",
     "SCHEDULE_TYPE_INTERVAL",

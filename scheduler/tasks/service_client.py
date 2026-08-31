@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from common.core.config import get_settings
 from common.services import service_client
 
 # 模块级日志记录器（禁用 debug 级别 —— 规范 38）。
@@ -48,6 +49,9 @@ _PRODUCT_SYNC_PATH: str = "/api/v1/products/sync"
 _CONNECT_PATH: str = "/api/v1/connections/connect"
 _DISCONNECT_PATH: str = "/api/v1/connections/disconnect"
 _STATUS_BATCH_PATH: str = "/api/v1/connections/status-batch"
+# backend 服务「系统事件通知」内部接口相对路径（与 backend 路由约定一致，TIK-026）：
+# 回复率跌破阈值等告警事件经该接口走通知渠道（企微群机器人）并落通知记录。
+_NOTIFY_EVENTS_PATH: str = "/api/v1/internal/notify-events"
 
 
 @dataclass
@@ -83,7 +87,10 @@ def _to_call_result(response: service_client.ServiceResponse) -> CallResult:
 
 
 def _post_with_retry(
-    base_url: str, path: str, payload: Dict[str, Any]
+    base_url: str,
+    path: str,
+    payload: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
 ) -> service_client.ServiceResponse:
     """对跨服务 POST 做「传输层失败」的有界指数退避重试。
 
@@ -94,13 +101,14 @@ def _post_with_retry(
         base_url: 目标服务基础地址（经环境变量配置）。
         path: 接口相对路径。
         payload: 请求体。
+        headers: 可选请求头（如内部接口鉴权 ``X-Internal-Token``，TIK-026）。
 
     Returns:
         最后一次调用的 ``ServiceResponse``（成功或已耗尽重试）。
     """
     delay = _RETRY_INITIAL_DELAY
     response = service_client.post_json(
-        base_url, path, payload, timeout=_DEFAULT_TIMEOUT_SECONDS
+        base_url, path, payload, timeout=_DEFAULT_TIMEOUT_SECONDS, headers=headers
     )
     for attempt in range(1, _MAX_RETRIES):
         # 传输层成功（可达且响应体合法）：无论业务成败都不再重试。
@@ -118,7 +126,7 @@ def _post_with_retry(
         time.sleep(delay)
         delay = min(delay * _RETRY_BACKOFF, _RETRY_MAX_DELAY)
         response = service_client.post_json(
-            base_url, path, payload, timeout=_DEFAULT_TIMEOUT_SECONDS
+            base_url, path, payload, timeout=_DEFAULT_TIMEOUT_SECONDS, headers=headers
         )
     return response
 
@@ -266,6 +274,39 @@ def query_status_batch(
     return _to_call_result(response)
 
 
+def trigger_notify_event(event_type: str, content: str, shop_pk: int) -> CallResult:
+    """经 HTTP 调用 backend 内部接口推送一条系统事件告警（TIK-026，零新增服务）。
+
+    回复率跌破阈值等告警事件经 backend ``/api/v1/internal/notify-events`` 走既有
+    通知链路：按店铺已启用渠道（企微群机器人等）推送并落 ``pdd_notify_record``。
+    服务间共享密钥经 ``common.core.config`` 读取并以 ``X-Internal-Token`` 请求头
+    携带（与 websocket 侧 alert_forwarder 同款鉴权约定）。传输层失败时按指数退避
+    重试，避免对端短暂抖动导致告警丢失。
+
+    Args:
+        event_type: 事件类型（须为 backend ``notify_service`` 已注册类型，
+            如 ``reply_rate_below_threshold``，否则被白名单拒绝）。
+        content: 通知内容（中文）。
+        shop_pk: 事件归属店铺主键。
+
+    Returns:
+        规整后的 ``CallResult``；成功时 ``data`` 含推送统计
+        ``{"total", "success", "failed"}``。
+    """
+    token = get_settings().internal_service_token
+    response = _post_with_retry(
+        service_client.backend_base_url(),
+        _NOTIFY_EVENTS_PATH,
+        {
+            "event_type": event_type,
+            "content": content,
+            "shop_pk": int(shop_pk),
+        },
+        headers={"X-Internal-Token": token},
+    )
+    return _to_call_result(response)
+
+
 __all__ = [
     "CallResult",
     "trigger_cookie_refresh",
@@ -273,4 +314,5 @@ __all__ = [
     "trigger_connect",
     "trigger_disconnect",
     "query_status_batch",
+    "trigger_notify_event",
 ]

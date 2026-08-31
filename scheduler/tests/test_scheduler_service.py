@@ -36,9 +36,11 @@ from tasks.constants import (
     RESULT_SUCCESS,
     SCHEDULE_TYPE_CRON,
     SCHEDULE_TYPE_INTERVAL,
+    SUPPORTED_TASK_KEYS,
     TASK_COOKIE_REFRESH,
     TASK_LOG_FILE_CLEANUP,
     TASK_PRODUCT_SYNC,
+    TASK_REPLY_RATE_CHECK,
 )
 from tasks.scheduler_service import SchedulerService
 
@@ -398,3 +400,34 @@ def test_run_log_file_cleanup_writes_success(db_session: Session, tmp_path, monk
     logs = Repository(TaskRunLog, db_session).list(filters={"task_key": TASK_LOG_FILE_CLEANUP})
     assert len(logs) == 1
     assert logs[0].run_result == RESULT_SUCCESS
+
+
+# ----------------------------------------------------------------------
+# TIK-026：回复率巡检任务注册链路（任务键 ↔ 执行体 ↔ 调度注册）
+# ----------------------------------------------------------------------
+def test_supported_keys_and_runners_are_consistent():
+    """受支持任务键集合与 TASK_RUNNERS 执行体一一对应（无孤儿键、无漏注册）。"""
+    assert set(task_runners.TASK_RUNNERS.keys()) == set(SUPPORTED_TASK_KEYS)
+    # 回复率巡检执行体已注册。
+    assert TASK_REPLY_RATE_CHECK in task_runners.TASK_RUNNERS
+
+
+def test_reply_rate_check_registered_as_hourly_interval(db_session: Session):
+    """reply_rate_check 种子配置（interval 3600 秒 = 每小时）可被调度器正常注册。"""
+    Repository(ScheduledTask, db_session).create(
+        task_key=TASK_REPLY_RATE_CHECK,
+        task_name="TikTok 回复率巡检",
+        schedule_type=SCHEDULE_TYPE_INTERVAL,
+        schedule_config="3600",
+        enabled=True,
+    )
+    db_session.commit()
+
+    service = SchedulerService()
+    try:
+        registered = service.start()
+        assert registered == 1
+        # 以任务键为 job_id 注册了一个可调度作业。
+        assert service._scheduler.get_job(TASK_REPLY_RATE_CHECK) is not None
+    finally:
+        service.shutdown()

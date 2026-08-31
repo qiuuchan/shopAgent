@@ -58,7 +58,8 @@ def test_dedup_recovers_after_silence_window(monkeypatch):
         return base + offset
 
     dedup = AlertDedup(silence_seconds=1800.0)
-    monkeypatch.setattr("engine.alert_dedup.now_beijing", _fake_now)
+    # 实现已上移 common（engine.alert_dedup 为兼容壳）：patch 公共实现的时间源。
+    monkeypatch.setattr("common.utils.alert_dedup.now_beijing", _fake_now)
 
     assert dedup.should_send(1, "connection_disconnected") is True
     dedup.mark_sent(1, "connection_disconnected")

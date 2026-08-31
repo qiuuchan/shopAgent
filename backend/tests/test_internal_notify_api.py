@@ -98,3 +98,27 @@ def test_internal_notify_invalid_event_type_rejected(client, db_session):
     assert resp.status_code == 200
     assert resp.json()["success"] is False
     assert db_session.query(NotifyRecord).count() == 0
+
+
+def test_internal_notify_reply_rate_event_accepted(client, db_session):
+    """TIK-026 新事件类型 reply_rate_below_threshold 被白名单放行（无渠道也成功）。"""
+    token = get_settings().internal_service_token
+    resp = client.post(
+        INTERNAL_EVENTS_URL,
+        json={
+            "event_type": "reply_rate_below_threshold",
+            "content": "【回复率告警】店铺[测试店] 回复率 70.00%，低于阈值 85%",
+            "shop_pk": 1,
+        },
+        headers=_headers(token),
+    )
+    assert resp.status_code == 200
+    # 无渠道：推送动作完成（total=0），响应仍为成功（不拒绝事件类型）。
+    assert resp.json()["success"] is True
+
+
+def test_reply_rate_event_type_registered():
+    """新事件类型已注册进 EVENT_TYPE_LABELS（含中文文案，供通知记录展示）。"""
+    labels = notify_service.EVENT_TYPE_LABELS
+    assert notify_service.EVENT_REPLY_RATE_BELOW_THRESHOLD == "reply_rate_below_threshold"
+    assert labels["reply_rate_below_threshold"] == "回复率跌破阈值"
