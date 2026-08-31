@@ -370,7 +370,7 @@ TIKTOK_MAX_BROWSER_INSTANCES（默认 4，超限拒绝连接并告警）
 
 **平台风控**：账号限流/封禁（业务方已接受）；RPA 违反平台条款风险（已知悉）；仅发送合规引导话术（模板+关键词，无 LLM，内容可控）；买家数据存储合规沿用现状。
 
-**部署影响**：websocket 容器内存上限调高（预留 4×1GB）；视 s5 结论加 xvfb；`websocket_browser_data` 卷扩容（4 店 user-data-dir）；`.env` 新增 TIKTOK_* 变量；BROWSER_HEADLESS 语义对 TikTok 独立（TIKTOK 通道默认 headless=true 除非被检测）。
+**部署影响**：websocket 容器内存上限（**2026-08-29 口径调整：单店监督，预留 1×1GB；现状 `mem_limit: 2g` 满足该预留并含 PDD 长连接/Python/系统缓冲余量**，原 4×1GB 为 4 店口径已随 TIK-027 取消不再适用，见 TIK-022）；视 s5 结论加 xvfb（实际 headless 可用、无需 Xvfb）；`websocket_browser_data` 卷挂载 `/app/websocket/browser_data`（单店 user-data-dir = 卷内 `tiktok_{shop_pk}` 子目录，TIK-022 核对）；`.env` 新增 TIKTOK_* 变量（6 项，见 §5.6）。
 
 ---
 

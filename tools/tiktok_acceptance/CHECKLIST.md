@@ -59,7 +59,7 @@
 
 - [ ] F1. 提供代理 IP（4 店防关联），填 `Shop.proxy_server`（支持 http(s):// 与 socks5(5h)://）
 - [ ] F2. 追加 2~3 家测试店（灰度 1 家 → 4 家）
-- [ ] F3. websocket 容器内存限额调高（预留 4×1GB）、`websocket_browser_data` 卷扩容
+- [x] F3. ~~websocket 容器内存限额调高（预留 4×1GB）、`websocket_browser_data` 卷扩容~~ —— **已随 TIK-027（扩量至 4 店）取消（2026-08-29 口径调整：仅监督 1 店）**。单店口径：`mem_limit: 2g`（满足 1×1GB 预留 + PDD/系统余量）、卷内单店 `tiktok_{shop_pk}` 子目录，TIK-022 已核对
 - [ ] F4. 确认企微群长期有效（告警投递目标）
 
 ## 常见问题速查

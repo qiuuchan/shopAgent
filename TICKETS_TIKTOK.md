@@ -32,7 +32,7 @@
 | TIK-019 | 多店并发实测（2~4 店资源与稳定性） | E1 | 外部：≥2 个 TikTok 测试店账号 | 1–2 + 观察窗口 | [!] 搁置（2026-08-29：口径调整，仅监督 1 店） |
 | TIK-020 | 频率断路器配置化（RiskRule 限流规则） | E1 | — | 0.5 | [x] 已交付（2026-08-29 实测通过） |
 | TIK-021 | 对账日常化（reconcile 固化为周期动作） | E1 | — | 0.5–1 | [x] 已交付（2026-08-31 验收通过） |
-| TIK-022 | 部署清单落实（.env/内存/卷/灰度开关核对） | E1 | TIK-017 | 0.5–1 | [ ] |
+| TIK-022 | 部署清单落实（.env/内存/卷/灰度开关核对） | E1 | TIK-017 | 0.5–1 | [x] 已交付（2026-08-31 验收全过） |
 | TIK-023 | 登录态过期周期观测 + cookie_refresh 周期配置 | E2 | — | 0.5 + 观察窗口 | [~] 工具侧交付（2026-08-29），观测窗口与人工演练待执行 |
 | TIK-024 | 首家真实店铺灰度接入（含转人工关键词配置） | F1 | 批次 E 其余（TIK-019 搁置）；外部：真实店铺 + 生产企微群 | 0.5 + 1–2 周观察 | [ ] |
 | TIK-025 | 回复率统计（首响分布/超时占比 + dashboard 平台维度） | F1 | —（可先行开发） | 1.5–2 | [x] 已交付（2026-08-29 真实库演练通过） |
@@ -368,6 +368,15 @@ TIK-001(2.5d) → TIK-009(0.5d) → TIK-011(1.75d) → TIK-012(1.75d) → TIK-01
 - **说明**：TIK-017 部署影响清单逐项核对落实（2026-08-29 口径调整为单店监督，资源按 1 店预留）：① `.env.example` TIKTOK_* 变量齐全（SHOP_ENABLED/POLL_INTERVAL/DEBOUNCE/SEND_TIMEOUT/LOGIN_WAIT_TIMEOUT/MAX_BROWSER_INSTANCES）；② websocket 容器 memory limit 预留 1×1GB（原 4×1GB 为 4 店口径，已随单店监督收窄）；③ `websocket_browser_data` 卷按单店 user-data-dir 预留；④ `TIKTOK_SHOP_ENABLED` 默认 false 语义复核（false 时 TikTok 店铺连接请求直接拒绝）。
 - **涉及文件**：`.env.example`、docker-compose 配置。
 - **验收**：① 部署配置逐项核对通过；② 空配置启动冒烟（默认值读取正确）；③ 灰度开关 false/true 行为各验证一次。
+- **交付与实测记录（2026-08-31，纯核对无代码改动）**：
+  1. **核对① ✅ .env.example 变量齐全且与实际读取点一致**：6 个 `TIKTOK_*` 变量全部在 `.env.example`（:66-76）且默认值与 `common/core/config.py`（:152-163）一致（false / 5.0 / 45.0 / 15.0 / 120000 / 4）。逐一对照 websocket 实际读取点：`TIKTOK_SHOP_ENABLED`→`connection_manager.create_channel` 灰度门控（:160）；`TIKTOK_POLL_INTERVAL_SECONDS`→`create_channel` 注入 `TikTokChannel.poll_interval`（:226）；`TIKTOK_DEBOUNCE_SECONDS`→注入 `debounce_seconds`（:227）；`TIKTOK_SEND_TIMEOUT_SECONDS`→注入 `TikTokSender.send_timeout`（:188）；`TIKTOK_LOGIN_WAIT_TIMEOUT_MS`→`tiktok_login._login_wait_timeout_ms()`（:75）；`TIKTOK_MAX_BROWSER_INSTANCES`→`_enforce_tiktok_limit`（:93）。全仓库无旁路 `os.getenv("TIKTOK_*")` 直接读取，统一走 `get_settings()`。默认值语义均已写清（.env.example 注释 + config.py docstring）。
+  2. **核对② ✅ websocket 容器 memory limit 与单店口径一致**：现状 `docker-compose.yml:154` `mem_limit: 2g`（git 历史 88c390c=TIK-017 即定为 2g，从未设 4g）。判定：2g 满足「1 店 × 1GB」TikTok 浏览器预留（s5 实测单实例 ≈75MB，1GB 已 13 倍余量），余量含 PDD 长连接 / Python / 系统缓冲（compose 注释已文档化）；原「4×1GB」为 4 店口径，已随 2026-08-29 单店监督（TIK-027 取消）不再适用。**同步修正 PLAN_TIKTOK.md §9 部署影响与 CHECKLIST.md F3 的旧「4×1GB / 4 店」残留文字**（部署清单与单店口径对齐，见下方遗留）。
+  3. **核对③ ✅ websocket_browser_data 卷按单店 user-data-dir 预留**：compose 命名卷 `websocket_browser_data:/app/websocket/browser_data`（:200），与 `PLAYWRIGHT_USER_DATA_DIR` 默认值一致（.env.example:62 / compose:187）；单店 user-data-dir = 卷内 `tiktok_{shop_pk}` 子目录（`browser_session._resolve_user_data_dir` :72，登录态目录建店登录后落库 `Shop.browser_data_dir` 复用免二次登录）。Docker 命名卷按需增长，无需预分配大小。
+  4. **核对④ ✅ TIKTOK_SHOP_ENABLED 默认 false 语义复核通过**：config.py:153 `Field(default=False)`；门控在 `connection_manager.create_channel`（:157-167）——platform=tiktok 且未启用 → `raise RuntimeError("TikTok 通道未启用…")`，所有建连入口（`/connections/connect` 路由、启动自动拉起 `start_enabled_channels`、backend/scheduler 经 HTTP 触发）均汇入该门控，异常被路由捕获规整为失败响应；TikTok 登录（`/login/password`）不设闸（可先建登录态，连接才被拒，符合设计）。
+  5. **验收② 空配置启动冒烟 ✅**：清空全部 `TIKTOK_*` 环境变量且不读根 `.env` 后构造 Settings，6 项默认值读取正确（false/5.0/45.0/15.0/120000/4）；`common/tests/test_tiktok_config.py` 2 例通过（defaults + env override）。
+  6. **验收③ 灰度开关 false/true 行为各验证一次 ✅**：`websocket/tests/test_channel_factory.py` 13 例全过——**false** → `create_channel(platform='tiktok')` 抛 RuntimeError（连接请求被拒，`test_create_channel_tiktok_rejected_when_disabled`）；**true** → 返回 TikTokChannel 真实装配（`test_create_channel_tiktok_is_real` / `test_tiktok_factory_wiring_no_start`，queue/parser/sender/notifier/browser_session 均注入）。另做路由层临时验证（验证后删除，不入库）：false 时 `POST /connections/connect(platform=tiktok)` 返回 `success=False / code=-1` 失败响应，日志出现「TikTok 通道未启用…拒绝连接请求」——连接请求在 HTTP 层即被直接拒绝。
+  7. **回归**：本次零产品代码改动（仅文档），common 配置 2 例 + websocket channel_factory 13 例全绿；未触碰 PDD 路径，无回归风险。
+- **遗留（不阻塞关单）**：① `mem_limit` 维持 2g 未收紧到字面 1g——2g 满足「1 店×1GB」TikTok 预留且含 PDD/Python/系统余量（compose 注释已文档化）；若业务要求字面 1g 封顶可后续下调，无运行收益、反增 PDD OOM 风险；② 本次核对发现并修正 PLAN_TIKTOK.md §9 与 CHECKLIST.md F3 的旧「4×1GB / 4 店」残留（多店口径已随 TIK-027 取消）；③ `BROWSER_HEADLESS` 对 TikTok 的独立语义（PLAN 原文曾写默认 headless=true）未纳入本单四项清单，实际 TikTok 通道默认非无头（与 PDD 同口径，便于人工验证码），如需 headless 化另立单。
 
 ### TIK-023 登录态过期周期观测 + cookie_refresh 周期配置
 
