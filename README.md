@@ -1,26 +1,28 @@
-# 拼多多自动回复系统（pdd-auto-reply）
+# shopAgent · 电商客服消息自动化系统
 
-面向拼多多多店铺商家的客服消息自动化系统。基于拼多多商家后台实时收发客服消息，结合关键词规则、AI 智能回复与知识库工具调用，实现 7×24 小时自动应答、转人工、风控与营业时间管控。
+多平台电商客服消息自动化系统。在开源项目 [pdd-auto-reply](https://github.com/zhinianboke/pdd-auto-reply)（AGPL-3.0）的拼多多自动回复能力之上二次开发：新增 **TikTok Shop 通道**，并将"单平台直写"重构为**通道抽象 + 可插拔实现**，实现 7×24 自动应答、转人工、风控与营业时间管控。
 
-系统采用左侧导航 + 右侧内容的管理界面布局，蓝白主色调并支持暗黑模式，顶部面包屑导航、右上角用户菜单、菜单显隐与移动端响应式适配。
+**本仓库二次开发部分（本人负责）：**
+
+| 模块 | 说明 |
+| --- | --- |
+| TikTok Shop 通道 | Playwright RPA 真实浏览器自动化：登录态持久化与恢复、会话卡严格匹配路由、消息收发、自发送回声抑制（`websocket/channel_tiktok/`） |
+| 平台抽象层 | `channel_base.py` 通道契约 + engine 平台解耦：消息消费/回复引擎/风控与平台无关（`websocket/channel_base.py`、`websocket/engine/`） |
+| 告警体系 | 掉线 / 回复率巡检告警 → 企微机器人 / 邮件渠道转发，含 AlertDedup 去重（`websocket/engine/alert_*.py`、`scheduler/`） |
+| 评测系统 | 检索 hit@k / AI 回退率 / judge 打分评测 CLI + TikTok 端到端验收工具（`tools/agent_eval/`、`tools/tiktok_acceptance/`） |
+| RAG 补强 | 知识向量落 MySQL 的混合检索（token 命中 + 向量余弦加权）+ 开关回退原 jieba 路径（`common/services/kb_hybrid.py`） |
+
+上游保留能力：拼多多长连接收发、关键词规则、商品专属回复、转人工、营业时间、RBAC 权限等（见"功能特性"）。
 
 ---
-
-## 交流群
-
-| 微信群 | QQ群 | 微信公众号 | Telegram | 赞赏支持 |
-|:---:|:---:|:---:|:---:|:---:|
-| ![微信群](https://xy.zhinianboke.com/static/qrcode/wechat-group.jpg) | ![QQ群](https://xy.zhinianboke.com/static/qrcode/qq-group.jpg) | ![微信公众号](https://xy.zhinianboke.com/static/qrcode/wechat-official-group.jpg) | ![Telegram](https://xy.zhinianboke.com/static/qrcode/telegram-group.png) | ![赞赏支持](https://xy.zhinianboke.com/static/qrcode/reward-group.png) |
-| 扫码加入微信交流群 | 扫码加入QQ交流群 | 关注公众号发送"最新源码"获取最新代码 | 扫码加入Telegram群 | 如果觉得好用，请作者喝杯咖啡 |
-
-如群二维码过期，请关注公众号获取最新群链接。
-
 ## 功能特性
 
 - **账号与店铺管理**：多账号、多店铺集中管理；支持账号密码登录（Playwright 浏览器，必要时人工过验证码/滑块）与手动粘贴 Cookie 导入两种接入方式；Cookie 凭据加密存储与自动刷新。
 - **消息收发与自动回复**：维护与拼多多商家后台的长连接（自动重连 + 心跳），消息入队按序消费；命中关键词规则、商品专属回复或默认回复兜底。
 - **AI 智能回复**：接入 LLM（OpenAI 兼容），通过工具调用检索商品知识库与客服知识库生成回复。
 - **知识库**：商品知识库与客服知识库（售后政策、物流、退换货、常见问答等），支持中文分词检索。
+- **向量混合检索（RAG 补强）**：新增 OpenAI 兼容 embedding 服务，知识向量落 MySQL（JSON 序列化，零新增基础设施）；`kb.search` 支持 token 命中 + 向量余弦加权合并的混合排序（`hybrid_rank` 纯函数），开关关闭时逐字节回退原 jieba 路径（零行为变更）。
+- **LLM 评测模块**：golden 数据集 + 评测 CLI（检索 hit@k / AI 回退率 / 关键词合规率 / 延迟分布），`--mock-llm` 档确定性可进 CI，`--judge` 按 rubric 打分，`compare.py` 做 baseline vs candidate 对比。
 - **商品管理**：商品列表查询与商品卡片发送。
 - **会话转移 / 转人工**：将客户会话从自动回复转接给指定人工客服。
 - **风控与消息过滤**：回复频率限制、风险消息识别、黑名单与消息过滤规则。
@@ -30,6 +32,56 @@
 - **用户与权限**：多用户、多角色、统一权限模块，菜单按授权渲染。
 - **在线聊天**：管理端实时查看会话并人工介入。
 - **数据看板**：核心指标统计与数据分析。
+
+---
+
+## 系统架构
+
+```mermaid
+flowchart TB
+    subgraph Channels["消息通道（可插拔）"]
+        PDD["拼多多通道<br/>商家后台长连接<br/>channel_pdd/"]
+        TK["TikTok Shop 通道<br/>Playwright RPA<br/>channel_tiktok/"]
+    end
+
+    subgraph Abstract["平台抽象层"]
+        BASE["ChannelBase 契约<br/>channel_base.py"]
+    end
+
+    subgraph Core["统一决策链路（websocket/engine/）"]
+        CONSUME["FIFO 消费队列<br/>message_consumer.py"]
+        DECIDE["9 级短路决策链<br/>reply_engine.py"]
+        KB["知识库检索<br/>kb.search（关键词+向量）"]
+        AGENT["ReAct Agent<br/>ai_reply_engine.py"]
+    end
+
+    subgraph Guard["工程护栏"]
+        BLACK["黑名单/过滤/营业时间/风控限流"]
+        BUDGET["超时兜底 / 强制收尾 / 店铺隔离"]
+        ALERT["掉线 / 回复率巡检告警（AlertDedup）"]
+    end
+
+    subgraph Out["发送"]
+        SEND["SendMessage 发送回复"]
+        HUMAN["转人工 / 会话转移"]
+    end
+
+    PDD --> BASE
+    TK --> BASE
+    BASE --> CONSUME
+    CONSUME --> DECIDE
+    DECIDE -->|未命中规则,走 AI| AGENT
+    DECIDE -->|命中关键词/商品/默认| SEND
+    AGENT --> KB
+    AGENT --> SEND
+    BLACK -.门槛检查.-> DECIDE
+    BUDGET -.约束.-> AGENT
+    DECIDE -.触发.-> HUMAN
+    ALERT -.监听.-> CONSUME
+    SEND --> HUMAN
+```
+
+> 消息流：双通道 → 统一消费队列 → 9 级决策链（最便宜的路径先命中）→ ReAct Agent（工具调用检索知识库）→ 发送 / 转人工。
 
 ---
 
@@ -179,6 +231,14 @@ cd websocket && pytest      # 长连接/引擎测试
 cd scheduler && pytest      # 调度任务测试
 cd common && pytest         # 公共库测试
 ```
+
+---
+## 常见问题（Troubleshooting）
+
+- **Windows 上跑测试报 `ZoneInfoNotFoundError`**：Windows 无系统时区库，`zoneinfo` 找不到时区。安装 `pip install tzdata` 即可（Linux / macOS / Docker 无此问题）。
+- **跑测试报 `module 'bcrypt' has no attribute '__about__'` 或「password cannot be longer than 72 bytes」**：`passlib[bcrypt]` 与新版 bcrypt(≥4.1) 不兼容，新装依赖会拉到 bcrypt 5.x。固定版本：`pip install "bcrypt<4.1"`。
+- **TikTok 通道登录态失效**：`PLAYWRIGHT_USER_DATA_DIR` 目录保存登录态，失效后会自动触发登录恢复；必要时人工介入一次验证码。
+- **Playwright 报浏览器未安装**：`playwright install chromium`（websocket 服务首次启动前）。
 
 ---
 
