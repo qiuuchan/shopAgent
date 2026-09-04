@@ -27,6 +27,7 @@ backend.app.services.cs_knowledge_service —— 客服知识管理业务服务
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -43,7 +44,34 @@ from common.models.knowledge_models import CustomerServiceKnowledge
 from common.models.shop_models import Shop
 from common.models.user_models import SysUser
 from common.schemas.common import ApiResponse, error_response, success_response
+from common.services.kb_indexing import index_knowledge_content
 from common.utils.time_utils import safe_isoformat
+
+logger = logging.getLogger("backend.cs_knowledge")
+
+
+def _index_cs_knowledge(session: Session, item: CustomerServiceKnowledge) -> None:
+    """best-effort 为客服知识生成向量索引（POL-004，失败不阻断写操作）。
+
+    组合标题 / 内容 / 标签为待向量化文本；embedding 未启用、缺密钥或网络失败
+    均由 ``index_knowledge_content`` 内部吞掉并记 warning，绝不向上抛。此处再
+    兜底一层 try/except，确保任何异常都不影响知识库写操作（best-effort）。
+    """
+    try:
+        content_text = " ".join(
+            part for part in (item.title, item.content, item.tags) if part
+        )
+        index_knowledge_content(
+            session,
+            shop_pk=item.shop_pk,
+            source_type="cs_knowledge",
+            source_id=item.id,
+            content_text=content_text,
+        )
+    except Exception:  # noqa: BLE001 - 索引失败绝不阻断写操作，交由回填 CLI 补建
+        logger.warning(
+            "客服知识向量索引异常已被抑制（id=%s），交由回填 CLI 补建", item.id
+        )
 
 
 # ----------------------------------------------------------------------
@@ -171,6 +199,7 @@ def create_cs_knowledge(
         enabled=bool(enabled),
         created_by=user.id,
     )
+    _index_cs_knowledge(session, item)
     return success_response(
         data=serialize_cs_knowledge(item), message="创建成功"
     )
@@ -226,6 +255,7 @@ def update_cs_knowledge(
     if not values:
         return error_response(CODE_PARAM_ERROR, "未提供任何待更新字段")
     repo.update(item_id, **values)
+    _index_cs_knowledge(session, item)
     return success_response(
         data=serialize_cs_knowledge(item), message="更新成功"
     )
@@ -332,6 +362,8 @@ def set_cs_knowledge_status(
     if denied is not None:
         return denied
     repo.update(item_id, enabled=bool(enabled))
+    # 重新启用时刷新向量（停用记录不参与检索，status 变更后重索引保证可用）。
+    _index_cs_knowledge(session, item)
     message = "已启用" if enabled else "已停用"
     return success_response(
         data=serialize_cs_knowledge(item), message=message
@@ -405,6 +437,7 @@ def import_cs_knowledge(
     imported = 0
     skipped = 0
     total = len(items)
+    created_items: list[CustomerServiceKnowledge] = []
     for raw in items:
         title = (raw.get("title") if isinstance(raw, dict) else None) or ""
         content = (raw.get("content") if isinstance(raw, dict) else None) or ""
@@ -422,7 +455,7 @@ def import_cs_knowledge(
 
         tags = raw.get("tags")
         enabled = raw.get("enabled", True)
-        repo.create(
+        new_item = repo.create(
             shop_pk=shop_pk,
             title=title,
             content=content,
@@ -430,8 +463,13 @@ def import_cs_knowledge(
             enabled=bool(enabled),
             created_by=user.id,
         )
+        created_items.append(new_item)
         seen_pairs.add(pair)
         imported += 1
+
+    # 批量导入后 best-effort 补齐向量（POL-004；失败仅记日志不阻断导入）。
+    for item in created_items:
+        _index_cs_knowledge(session, item)
 
     data = {"imported": imported, "skipped": skipped, "total": total}
     return success_response(

@@ -26,6 +26,7 @@ websocket 复用，本文件只负责 backend 侧的商品知识 CRUD、查询�
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -42,7 +43,38 @@ from common.models.knowledge_models import ProductKnowledge
 from common.models.shop_models import Shop
 from common.models.user_models import SysUser
 from common.schemas.common import ApiResponse, error_response, success_response
+from common.services.kb_indexing import index_knowledge_content
 from common.utils.time_utils import safe_isoformat
+
+logger = logging.getLogger("backend.product_knowledge")
+
+
+def _index_product_knowledge(session: Session, item: ProductKnowledge) -> None:
+    """best-effort 为商品知识生成向量索引（POL-004，失败不阻断写操作）。
+
+    商品知识的向量化文本取自抽取内容（extracted_content），其次为规格 / 商品
+    名称。参数化调用内部静默处理 embedding 未启用 / 缺密钥 / 网络失败；此处再
+    兜底一层 try/except，确保任何异常都不影响知识库写操作（best-effort）。
+    """
+    try:
+        content_text = item.extracted_content or ""
+        if not content_text.strip():
+            content_text = " ".join(
+                part for part in (item.goods_name, item.specifications) if part
+            )
+        if not content_text.strip():
+            return
+        index_knowledge_content(
+            session,
+            shop_pk=item.shop_pk,
+            source_type="product_knowledge",
+            source_id=item.id,
+            content_text=content_text,
+        )
+    except Exception:  # noqa: BLE001 - 索引失败绝不阻断写操作，交由回填 CLI 补建
+        logger.warning(
+            "商品知识向量索引异常已被抑制（id=%s），交由回填 CLI 补建", item.id
+        )
 
 
 # ----------------------------------------------------------------------
@@ -189,6 +221,7 @@ def upsert_product_knowledge(
         biz_keys={"shop_pk": shop_pk, "goods_id": goods_id.strip()},
         values=values,
     )
+    _index_product_knowledge(session, item)
     return success_response(
         data=serialize_product_knowledge(item), message="保存成功"
     )
@@ -253,6 +286,7 @@ def update_product_knowledge(
     if not values:
         return error_response(CODE_PARAM_ERROR, "未提供任何待更新字段")
     repo.update(item_id, **values)
+    _index_product_knowledge(session, item)
     return success_response(
         data=serialize_product_knowledge(item), message="更新成功"
     )
