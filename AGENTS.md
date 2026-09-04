@@ -21,7 +21,7 @@
 
 ## 技术栈
 
-- **后端（Python ≥3.11）**：FastAPI + Uvicorn（ASGI）、SQLAlchemy 2.0（同步）+ PyMySQL（MySQL，参数化查询）、websockets（拼多多长连接）、Playwright（账号密码登录）、openai 兼容客户端 + jieba（AI 回复与知识库检索）、PyJWT + passlib[bcrypt]（鉴权与密码哈希）、cryptography（Fernet 可逆加密）、pydantic / pydantic-settings（校验与配置）、APScheduler（仅 scheduler）、aiohttp（仅 scheduler，服务间调用）。
+- **后端（Python ≥3.11）**：FastAPI + Uvicorn（ASGI）、SQLAlchemy 2.0（同步）+ PyMySQL（MySQL，参数化查询）、websockets（拼多多长连接）、Playwright（账号密码登录）、openai 兼容客户端 + jieba（AI 回复与知识库检索）、**向量 embedding（OpenAI 兼容 `/embeddings`，仅标准库 urllib；知识向量落 MySQL TEXT 列）**、PyJWT + passlib[bcrypt]（鉴权与密码哈希）、cryptography（Fernet 可逆加密）、pydantic / pydantic-settings（校验与配置）、APScheduler（仅 scheduler）、aiohttp（仅 scheduler，服务间调用）。
 - **前端**：Vue 3 + Vite 6、Vue Router 4 + Pinia、Tailwind CSS 3（class 暗黑模式）+ lucide-vue-next、axios。无 TypeScript、无 ESLint/Prettier 配置（前端为纯 JS）。
 - **基础设施**：MySQL 8.0（utf8mb4、全链路北京时间 UTC+8）、Redis 7（缓存 / 分布式锁）。
 - **许可证**：AGPL-3.0。
@@ -37,10 +37,16 @@ pdd-auto-reply/
 │   ├── models/              #   数据模型，按业务域拆分（user/shop/reply/knowledge/
 │   │                        #   config/log/setting/task + base.py 基类混入）
 │   ├── schemas/             #   统一响应体(common.py)、输入清洗(sanitize.py)
-│   ├── services/            #   字典服务、AI 供应商、知识库、管理员种子、服务间客户端
+│   ├── services/            #   字典服务、AI 供应商、知识库、管理员种子、服务间客户端、
+│   │                        #   向量 embedding(embedding_service，P0L)、向量索引
+│   │                        #   (kb_indexing，P0L)、混合排序(kb_hybrid，P0L)
 │   └── utils/               #   加解密(crypto.py)、安全(security.py)、分页、北京时间、
 │                            #   星期/营业时间判定(weekdays.py/business_hours.py)、
 │                            #   首响时长统计纯函数(latency.py，TIK-025 由 tools 上移)
+├── tools/                    # 验收/统计/评测独立工具（不进服务代码，经 sys.path 引用 common）
+│   ├── agent_eval/          #   LLM 评测模块（golden 集 / 确定性指标 / LLM-as-judge /
+│   │                        #   baseline vs candidate 对比）——TIK/P0L
+│   └── kb_embedding/        #   知识库向量回填 CLI（--full/--delta/--check）——P0L
 ├── backend/                 # HTTP API 服务（8089）
 │   ├── app/api/routes/      #   REST 路由（auth/users/roles/shops/keywords/replies/
 │   │                        #   ai_config/knowledge/risk_control/chat/... 共 28 个域）
@@ -89,6 +95,7 @@ cd common     && ../.venv/Scripts/python -m pytest     # 公共库测试
 cd backend    && ../.venv/Scripts/python -m pytest     # API 测试
 cd websocket  && ../.venv/Scripts/python -m pytest     # 长连接/引擎测试
 cd scheduler  && ../.venv/Scripts/python -m pytest     # 调度测试
+cd tools      && ../.venv/Scripts/python -m pytest tests  # 验收/评测工具测试
 ```
 
 测试全部使用内存 SQLite（conftest 将 `get_db` / `get_session_factory` / `get_engine` 重定向到测试引擎），不依赖真实 MySQL/Redis；服务间网络调用处均有 mock。属性测试统一使用 Hypothesis（默认 `max_examples` 不低于 100，实测常见 200）。
@@ -136,6 +143,16 @@ bash update.sh [-y] [--no-git]   # 可选 git pull → 重建镜像 → 滚动�
 - 全部 SQL 经 `common.db.repository.Repository`（`create/get/get_by/list/count/update/paginate/soft_delete/upsert`）参数化执行，业务层不写原生 SQL（规范 12/16）。
 - 事务由 `common.db.session.get_db`（FastAPI 依赖）统一 commit/rollback；仓储层只 flush 不 commit（规范 36）。
 - 模型统一继承 `common.models.base.Base` + `AuditMixin`（自增 BIGINT 主键 `id`、`created_at`/`updated_at` 北京时间、`created_by`）；**不使用外键约束**（关系由代码维护）；**禁止物理删除业务数据**（软删除经 `deleted_flag/status/enabled/is_active` 探测）；敏感字段（`password_hash/cookies_enc/...`）对外响应脱敏。
+
+#### 向量混合检索（POL 引入，默认关）
+
+- **`common.services.embedding_service`**（新建）：OpenAI 兼容 `/embeddings` 向量化，仅 stdlib urllib；纯函数（配置校验/文本规整/向量 JSON 编解码/`cosine_similarity` 零向量安全/`resolve_embedding_config` 回退 chat 配置）与网络 `embed_texts` 分离；异常文本不含密钥。
+- **`common.services.kb_hybrid`**（新建）：`hybrid_rank` 纯函数——token 命中数与余弦各自 min-max 归一化后加权合并（默认权重 0.5），无 I/O。
+- **`common.services.kb_indexing`**（新建）：`index_knowledge_content` best-effort 生成向量并 upsert（`content_hash` 失效检测），失败仅记 warning 绝不阻断知识库写操作；`is_embedding_enabled` / `build_content_hash` 纯函数。
+- **`common.models.knowledge_models.KbEmbedding`**：表 `pdd_kb_embedding`（shop_pk / source_type / source_id / content_hash / model_name / vector_json Text / enabled），`UniqueConstraint(shop_pk, source_type, source_id)`，无外键——对齐 `pdd_product` 表 uix 先例。
+- **`LlmConfig` 增列**：`embedding_model`(String 128 可空) / `embedding_enabled`(Boolean default False)；SchemaMigrator 自动补列，**无需注册、不改 init_database.py**（backend 唯一执行迁移）。
+- **触发条件**（`kb_service.search`）：传入 query + 店铺 `embedding_enabled=True` + 本店启用记录有可用向量，三者同时满足才走向量路径；任一不满足逐字节回退原 jieba 路径（零行为变更）。`websocket/agent/tools.py` 零改动（升级对 Agent 循环透明）。
+- **索引构建**：backend 知识库写路径 best-effort 挂钩（`cs_knowledge_service` / `product_knowledge_service`）+ `tools/kb_embedding/backfill.py` CLI（`--mode full/delta/check`）。
 
 ### 前端约定
 
@@ -198,3 +215,20 @@ bash update.sh [-y] [--no-git]   # 可选 git pull → 重建镜像 → 滚动�
 - **已知环境坑 1（Windows）**：`zoneinfo` 在 Windows 无系统时区库，直接运行测试会报 `ZoneInfoNotFoundError`；需 `pip install tzdata`（Linux/macOS/Docker 无此问题，pyproject 未声明该依赖）。
 - **已知环境坑 2（依赖版本）**：`passlib[bcrypt]>=1.7.4` 未约束 bcrypt 上界，新装会拉到 bcrypt≥4.1（实测 5.0.0），导致 passlib 1.7.4 的 `bcrypt_sha256` 失效（`module 'bcrypt' has no attribute '__about__'`，随后报「password cannot be longer than 72 bytes」）。实测 `pip install bcrypt==4.0.1` 后 common 测试全部通过。建议在 `common/pyproject.toml` 中为 bcrypt 加上界（如 `bcrypt<4.1`），或升级 passlib。
 - 前端：Node 24 + `npm ci --no-audit --no-fund` + `npm run build` 实测成功（`✓ built in 36.04s`，产物在 `frontend/dist/`）。
+
+### 2026-09-01 基线（POL 打磨工单推进前核实，回归基线）
+
+四服务 + tools 全量测试，内存 SQLite + mock 网络，共 **749** 例全绿：
+
+| 组件 | 通过 |
+| --- | --- |
+| common | 63 |
+| backend | 253 |
+| websocket | 352 |
+| scheduler | 52 |
+| tools | 29 |
+| **合计** | **749** |
+
+POL 批次（RAG 补强 / 评测模块 / 文档收口）落地后全量回归：**829 例全绿**
+（common 98 / backend 257 / websocket 352 / scheduler 52 / tools 70），
+较 POL 前基线 749 新增 80 例（common +35 / backend +4 / tools +41）。
