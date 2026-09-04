@@ -187,6 +187,14 @@ class LlmConfig(AuditMixin, Base):
     ai_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, comment="是否启用 AI 回复"
     )
+    # 向量检索（RAG）相关：嵌入模型名与总开关（POL 引入，默认关，零行为变更）。
+    # embedding_model 可空：缺省时由服务层回退 chat 的模型 / 默认模型。
+    embedding_model: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="向量嵌入模型名称（可空，缺省回退 chat 配置）"
+    )
+    embedding_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, comment="是否启用向量混合检索（默认关）"
+    )
 
 
 __all__ = [

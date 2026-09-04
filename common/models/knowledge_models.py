@@ -118,6 +118,53 @@ class CustomerServiceKnowledge(AuditMixin, Base):
     )
 
 
+class KbEmbedding(AuditMixin, Base):
+    """知识库向量表 pdd_kb_embedding。
+
+    存储知识条目的文本 embedding 向量（POL-003），供向量混合检索
+    （POL-005）使用：按 ``shop_pk`` + ``source_type`` + ``source_id`` 唯一关联
+    一条知识（商品知识 / 客服知识），``content_hash`` 用于内容失效检测，
+    ``vector_json`` 存 JSON 序列化的浮点向量（TEXT 列，对齐
+    ``ProductKnowledge.specifications`` 先例）。
+
+    逻辑唯一：``shop_pk`` + ``source_type`` + ``source_id``（唯一索引，
+    与代码层 upsert 幂等双重保证，对齐 pdd_product 表 uix 先例）；无外键（规范 10）。
+    """
+
+    __tablename__ = "pdd_kb_embedding"
+    __table_args__ = (
+        UniqueConstraint(
+            "shop_pk", "source_type", "source_id", name="uix_kb_embedding_source"
+        ),
+        {"comment": "知识库向量表（按知识条目存储文本 embedding 向量）"},
+    )
+
+    shop_pk: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="关联店铺主键 shop.id（业务键一部分，无外键）"
+    )
+    # 知识来源类型：product_knowledge（商品知识）/ cs_knowledge（客服知识）
+    source_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="知识来源类型：product_knowledge / cs_knowledge"
+    )
+    source_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="知识条目主键 id（业务键一部分，无外键）"
+    )
+    # 内容哈希：内容变更时变化，用于回填 CLI 检测失效条目（POL-004）
+    content_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="知识内容哈希（内容变更时变化，用于失效检测）"
+    )
+    model_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="生成该向量的嵌入模型名"
+    )
+    # 向量：JSON 序列化的浮点数组（TEXT 列，与 specifications JSON 文本先例一致）
+    vector_json: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="embedding 向量（JSON 数组文本）"
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, comment="是否启用（停用不参与检索）"
+    )
+
+
 class Product(AuditMixin, Base):
     """商品表 product。
 
@@ -163,5 +210,6 @@ class Product(AuditMixin, Base):
 __all__ = [
     "ProductKnowledge",
     "CustomerServiceKnowledge",
+    "KbEmbedding",
     "Product",
 ]
