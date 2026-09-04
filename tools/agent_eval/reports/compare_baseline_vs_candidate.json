@@ -1,0 +1,11 @@
+{
+  "summary_diff": {
+    "total": 2,
+    "retrieval_hit_at_k_delta": 1.0,
+    "ai_fallback_rate_delta": 0.0,
+    "keyword_compliance_rate_delta": 0.0,
+    "latency_p50_delta": 0.0,
+    "latency_p95_delta": 0.0
+  },
+  "regressions": []
+}

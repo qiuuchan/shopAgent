@@ -1,0 +1,23 @@
+# 种子评测数据集：拼多多多店铺电商客服场景（POL-007）
+# 每行一个 JSON 对象；'#' 开头为注释行，运行时跳过。
+# 字段：id / query / expected_kb_titles[] / must_contain[] / must_not_contain[] / expect_fallback
+{"id": "kb-001", "query": "你们支持七天无理由退换货吗", "expected_kb_titles": ["退换货政策"], "must_contain": ["七天无理由"], "must_not_contain": ["不支持"], "expect_fallback": false}
+{"id": "kb-002", "query": "这个商品多久发货", "expected_kb_titles": ["发货时效", "物流时效"], "must_contain": ["发货"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-003", "query": "有运费险吗", "expected_kb_titles": ["运费说明"], "must_contain": ["运费"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-004", "query": "怎么联系人工客服", "expected_kb_titles": ["转人工"], "must_contain": ["客服"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-005", "query": "优惠券和满减可以叠加吗", "expected_kb_titles": ["优惠活动"], "must_contain": ["优惠"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-006", "query": "衣服尺码偏大还是偏小", "expected_kb_titles": ["尺码说明"], "must_contain": ["尺码"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-007", "query": "这个能开发票吗", "expected_kb_titles": ["发票说明"], "must_contain": ["发票"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-008", "query": "产品有质量问题怎么办", "expected_kb_titles": ["售后处理"], "must_contain": ["售后"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-009", "query": "支持什么支付方式", "expected_kb_titles": ["支付说明"], "must_contain": ["支付"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-010", "query": "为什么我的订单一直显示待发货", "expected_kb_titles": ["订单状态说明"], "must_contain": ["发货"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-011", "query": "可以指定快递公司吗", "expected_kb_titles": ["物流时效"], "must_contain": ["快递"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-012", "query": "你们的营业时间是几点", "expected_kb_titles": ["营业时间"], "must_contain": ["营业"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-013", "query": "能便宜一点吗，给个优惠", "expected_kb_titles": ["优惠活动"], "must_contain": ["优惠"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-014", "query": "这个商品有没有现货", "expected_kb_titles": ["库存说明"], "must_contain": ["库存"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-015", "query": "退货运费谁承担", "expected_kb_titles": ["退换货政策", "运费说明"], "must_contain": ["运费"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-016", "query": "支持试用吗", "expected_kb_titles": ["试用说明"], "must_contain": ["试用"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-017", "query": "收到货有问题怎么申请售后", "expected_kb_titles": ["售后处理", "退换货政策"], "must_contain": ["售后"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-018", "query": "商品说明书有电子版吗", "expected_kb_titles": ["说明书"], "must_contain": ["说明"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-019", "query": "包装会不会压坏商品", "expected_kb_titles": ["包装说明"], "must_contain": ["包装"], "must_not_contain": [], "expect_fallback": false}
+{"id": "kb-020", "query": "你们是正品吗", "expected_kb_titles": ["正品保障"], "must_contain": ["正品"], "must_not_contain": [], "expect_fallback": false}

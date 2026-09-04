@@ -1,0 +1,44 @@
+{
+  "summary": {
+    "total": 2,
+    "completed": 2,
+    "retrieval_hit_at_k": 0.0,
+    "ai_fallback_rate": 0.0,
+    "keyword_compliance_rate": 1.0,
+    "latency": {
+      "p50": 0.0,
+      "p95": 0.0
+    }
+  },
+  "cases": [
+    {
+      "id": "kb-001",
+      "query": "你们支持七天无理由退换货吗",
+      "expected_kb_titles": [
+        "退换货政策"
+      ],
+      "result_titles": [],
+      "reply": "您好，为您解答：你们支持七天无理由退换货吗",
+      "used_default": false,
+      "expected_fallback": false,
+      "latency_ms": 0.0,
+      "completed": true,
+      "error": null
+    },
+    {
+      "id": "kb-002",
+      "query": "这个商品多久发货",
+      "expected_kb_titles": [
+        "发货时效",
+        "物流时效"
+      ],
+      "result_titles": [],
+      "reply": "您好，为您解答：这个商品多久发货",
+      "used_default": false,
+      "expected_fallback": false,
+      "latency_ms": 0.0,
+      "completed": true,
+      "error": null
+    }
+  ]
+}
